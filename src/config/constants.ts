@@ -1026,6 +1026,7 @@ function getUserAvatar(data) {
 
 let activeTiktok = null;
 let reconnectTimer = null;
+let connectSeqId = 0;
 
 async function loadTikTokConnectorPkg() {
   try {
@@ -1044,6 +1045,8 @@ async function connectTikTok(customUser) {
     return { ok: false, error: 'Chưa nhập ID TikTok' };
   }
 
+  const mySeq = ++connectSeqId;
+
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -1056,10 +1059,17 @@ async function connectTikTok(customUser) {
     activeTiktok = null;
   }
 
+  if (mySeq !== connectSeqId) {
+    return { ok: true, roomId: 'SUPERSEDED' };
+  }
+
   const targetUser = TIKTOK_USERNAME;
 
   try {
     const pkg = await loadTikTokConnectorPkg();
+    if (mySeq !== connectSeqId) {
+      return { ok: true, roomId: 'SUPERSEDED' };
+    }
     if (pkg.RoomIdRouteConfig) {
       pkg.RoomIdRouteConfig.skipFetchRoomInfoFromHtmlRoute = true;
     } else if (pkg.default?.RoomIdRouteConfig) {
@@ -1124,6 +1134,7 @@ async function connectTikTok(customUser) {
     };
 
     tiktok.on('chat', data => {
+      if (activeTiktok !== tiktok) return;
       try {
         const username = getUserName(data);
         const comment = String(getCommentText(data) || '').trim();
@@ -1134,14 +1145,22 @@ async function connectTikTok(customUser) {
     });
 
     tiktok.on('gift', data => {
+      if (activeTiktok !== tiktok) return;
       try {
         const giftType =
           data?.gift?.type ??
           data?.giftType ??
           data?.gift?.giftType ??
           data?.giftDetails?.giftType;
-        const repeatEnd = Boolean(data?.repeatEnd ?? data?.gift?.repeatEnd);
-        if (giftType === 1 && !repeatEnd) return;
+        const rawRepeatEnd = data?.repeatEnd ?? data?.gift?.repeatEnd;
+        const repeatEnd = Boolean(rawRepeatEnd);
+        if (
+          rawRepeatEnd === false ||
+          rawRepeatEnd === 0 ||
+          (giftType === 1 && !repeatEnd)
+        ) {
+          return;
+        }
 
         const username = getUserName(data);
         const fallbackGift = GIFT_ID_FALLBACK[Number(data?.giftId)] || null;
@@ -1163,7 +1182,15 @@ async function connectTikTok(customUser) {
           'Rose';
         const coins = Math.max(1, diamondCount * repeatCount);
         console.log(\`🎁 [QUÀ TẶNG] \${username} tặng \${giftName} x\${repeatCount} (\${coins} xu)\`);
-        broadcast({ type: 'gift', username, avatarUrl: getUserAvatar(data), giftName, coins, repeatCount });
+        broadcast({
+          type: 'gift',
+          username,
+          avatarUrl: getUserAvatar(data),
+          giftName,
+          coins,
+          repeatCount,
+          repeatEnd: true
+        });
       } catch (e) {}
     });
 

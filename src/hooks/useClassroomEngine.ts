@@ -668,13 +668,17 @@ export function useClassroomEngine() {
         const headItem = queue[0];
         const targetProvId = headItem.provinceId;
 
-        // Nếu mục đầu là NPC -> mỗi chu kỳ NPC chỉ chạy đúng 1 người duy nhất!
-        // Nếu là người chơi thật -> gom các mục người chơi thật có cùng `provinceId`
-        const sameProvinceItems = headItem.isNpc
-          ? [headItem]
-          : queue.filter(
-              (item) => item.provinceId === targetProvId && !item.isNpc
-            );
+        // - Nếu mục đầu là NPC hoặc là Quà tặng / Hoa hồng (isRose): xử lý độc lập từng mục để đọc chính xác số bông hoa và số điểm của từng lượt tặng!
+        // - Nếu là bình luận 1 điểm của người chơi thật (!isNpc && !isRose): gom các bình luận 1 điểm có cùng `provinceId` để đọc nhanh
+        const sameProvinceItems =
+          headItem.isNpc || headItem.isRose
+            ? [headItem]
+            : queue.filter(
+                (item) =>
+                  item.provinceId === targetProvId &&
+                  !item.isNpc &&
+                  !item.isRose
+              );
         const pickedIds = new Set(sameProvinceItems.map((item) => item.id));
         const remainingQueue = queue.filter((item) => !pickedIds.has(item.id));
 
@@ -727,7 +731,7 @@ export function useClassroomEngine() {
           isRose: anyRose,
           senders: mergedSenders,
           totalRoses: mergedRoses,
-          totalGifts: mergedGifts,
+          totalGifts: anyRose ? Math.max(1, mergedRoses) : mergedGifts,
           startedAt: now,
           until: now + holdMs,
         };
@@ -757,16 +761,23 @@ export function useClassroomEngine() {
 
   /**
    * Luồng Kết Thúc Phiên Chơi & Chuyển Sang Vòng Mới:
-   * - Ngắt ngay việc đọc quà thường, dừng lấy thêm hàng chờ Camera
+   * - Xóa toàn bộ hàng chờ 1 điểm (comment trong hàng chờ), CHỈ GIỮ LẠI hàng chờ tặng quà (isRose = true) sang phiên mới
    * - Đưa Camera về Map tổng
    * - Cộng +1 lần đạt Top 1 (`top1WinCount`) cho tỉnh dẫn đầu phiên (nếu có điểm > 0)
-   * - Thông báo Kết Quả Phiên & đọc vinh danh Top 3 tỉnh kèm TÊN NGƯỜI TẶNG ĐIỂM NHIỀU NHẤT của mỗi tỉnh bằng Giọng đọc AI #3
+   * - Thông báo Kết Quả Phiên & đọc vinh danh Top 1, 2, 3 tỉnh bằng Giọng đọc AI #3
    * - ƯU TIÊN THEO NGƯỜI ĐỌC: Ngay khi Giọng đọc AI #3 đọc xong câu tổng kết -> lập tức chuyển luồng sang vòng mới,
-   *   reset điểm phiên (giữ nguyên `top1WinCount`), reset danh sách 1-bình-luận/phiên, đọc lời chào Vòng mới và chạy tiếp hàng chờ tồn đọng!
+   *   reset điểm phiên (giữ nguyên `top1WinCount`), reset danh sách 1-bình-luận/phiên, đọc lời chào Vòng mới và chạy tiếp hàng chờ tặng quà!
    */
   const handleSessionTimeUp = useCallback((sessionNum: number) => {
     if (isSessionEndingRef.current) return;
     isSessionEndingRef.current = true;
+
+    // Khi kết thúc phiên chơi: xóa các hàng chờ 1 điểm (comment trong hàng chờ), chỉ giữ lại hàng chờ tặng quà (isRose = true)
+    const giftOnlyQueue = cameraQueueRef.current.filter((q) =>
+      Boolean(q.isRose)
+    );
+    cameraQueueRef.current = giftOnlyQueue;
+    setCameraQueue(giftOnlyQueue);
 
     overviewPauseUntilRef.current = 0;
     const resetFocus: CameraFocusState = { provinceId: null, until: 0 };
@@ -782,7 +793,7 @@ export function useClassroomEngine() {
     const top3 = sorted.slice(0, 3);
     const scoredTop3 = top3.filter((p) => p.points > 0);
     const top1WinnerId = scoredTop3.length > 0 ? scoredTop3[0].id : null;
-    const deferredCount = cameraQueueRef.current.length;
+    const deferredCount = giftOnlyQueue.length;
     const sessionName = configRef.current.sessionTitle || 'Vòng';
 
     // Cập nhật ngay số lần đạt Top 1 cho tỉnh hạng nhất phiên này
@@ -873,31 +884,34 @@ export function useClassroomEngine() {
       });
     };
 
-    // Đọc lần lượt đầy đủ tất cả các câu tổng kết Top 3 tỉnh kèm người đóng góp nhiều nhất.
+    // Đọc lần lượt đầy đủ tất cả các câu tổng kết Top 3 tỉnh.
     // CHỈ KHI NGƯỜI ĐỌC ĐỌC XONG HẾT toàn bộ phần tổng kết mới chuyển sang phiên game mới!
     soundEngine.announceSessionResultNow(
       summarySentences,
       configRef.current,
       () => {
-        const waitUntilReaderIdle = () => {
+        const waitUntilSummaryDone = () => {
           if (transitioned) return;
-          if (soundEngine.isBusySpeakingOrQueued()) {
-            window.setTimeout(waitUntilReaderIdle, 250);
+          if (soundEngine.isSessionSummarySpeakingOrQueued()) {
+            window.setTimeout(waitUntilSummaryDone, 200);
             return;
           }
-          window.setTimeout(transitionToNextRound, 350);
+          window.setTimeout(transitionToNextRound, 300);
         };
-        waitUntilReaderIdle();
+        waitUntilSummaryDone();
       }
     );
 
-    // Bộ kiểm tra an toàn: Nếu người đọc vẫn đang đọc (isBusySpeakingOrQueued = true) thì tiếp tục chờ,
+    // Bộ kiểm tra an toàn: Nếu người đọc vẫn đang đọc phần tổng kết thì tiếp tục chờ,
     // tuyệt đối không ngắt ngang khi đang đọc tổng kết!
     const startedSummaryAt = Date.now();
     const checkSummarySafety = () => {
       if (transitioned) return;
       const elapsedMs = Date.now() - startedSummaryAt;
-      if (soundEngine.isBusySpeakingOrQueued() && elapsedMs < 90000) {
+      if (
+        soundEngine.isSessionSummarySpeakingOrQueued() &&
+        elapsedMs < 90000
+      ) {
         sessionEndTimeoutRef.current = window.setTimeout(
           checkSummarySafety,
           1000
@@ -915,8 +929,8 @@ export function useClassroomEngine() {
   /**
    * Hàm trung tâm xử lý khi người chơi bình luận đến tỉnh (+1đ) hoặc gửi hoa hồng (+5đ)
    * - Trong mỗi phiên: người chơi chỉ được bình luận 1 lần để +1 điểm (nhưng có thể tặng nhiều hoa hồng & nhiều điểm không giới hạn!)
-   * - Khi đang chờ trong `cameraQueue`, nếu có người thật mới vào cùng tỉnh -> gom người thật vào chung 1 mục của tỉnh đó
-   * - Với NPC: mỗi chu kỳ chỉ 1 người, không gộp chung nhiều NPC!
+   * - Gửi quà / gửi hoa (isRose = true) luôn được ưu tiên đẩy lên ĐẦU hàng chờ đọc (trước các bình luận 1 điểm)
+   * - Mỗi lượt tặng hoa được giữ nguyên số lượng hoa và số điểm chính xác, không tự động gộp làm sai lệch số bông hoa
    */
   const executeProvinceGift = useCallback(
     (
@@ -958,20 +972,21 @@ export function useClassroomEngine() {
       }
 
       const roseCount = payload.isRose
-        ? Math.max(1, payload.roseCountOverride || 1)
+        ? Math.max(1, Number(payload.roseCountOverride) || 1)
         : 0;
       const pointsAdded =
         payload.pointsOverride !== undefined
-          ? Math.max(1, payload.pointsOverride)
+          ? Math.max(1, Number(payload.pointsOverride) || 1)
           : payload.isRose
           ? Math.max(1, (cfg.rosePoints || 5) * roseCount)
           : Math.max(1, cfg.commentPoints || 1);
 
-      // 2. Chống bị bắn đúp cùng 1 gói quà / bình luận trong khoảng < 320ms
+      // 2. Chống bị bắn đúp cùng 1 gói quà / bình luận (chặn 5000ms đối với gói đồng bộ chéo giữa 2 tab để tuyệt đối không bị x2 quà khi mở 2 cửa sổ)
       const fingerprint = `${userKey}:${targetProv.id}:${payload.isRose ? 'R' : 'C'}:${pointsAdded}:${roseCount}:${isFromNpc ? 'N' : 'U'}`;
       const lastExecAt =
         recentGiftFingerprintMapRef.current.get(fingerprint) || 0;
-      if (now - lastExecAt < 320) {
+      const throttleWindowMs = broadcastSync ? 380 : 5000;
+      if (now - lastExecAt < throttleWindowMs) {
         return { ok: false, reason: 'duplicate_gift_throttled' };
       }
       recentGiftFingerprintMapRef.current.set(fingerprint, now);
@@ -1027,17 +1042,34 @@ export function useClassroomEngine() {
         addedAt: now,
         senders: [contributor],
         totalRoses: roseCount,
-        totalGifts: 1,
+        totalGifts: payload.isRose ? Math.max(1, roseCount) : 1,
       };
 
       // Hàm phụ trợ: Đưa vào hàng chờ Camera đồng bộ qua `cameraQueueRef.current`
-      // (Tránh lỗi stale state của setCameraQueue làm phục hồi lại mục vừa lấy ra gây double quà!)
-      // Nếu là NPC: luôn xếp thành 1 mục độc lập (1 người / lần), không gộp với mục khác!
+      // - Nếu là Quà tặng / Hoa hồng (payload.isRose = true): ƯU TIÊN ĐẨY LÊN ĐẦU HÀNG CHỜ (trước toàn bộ các bình luận 1 điểm)
+      //   và giữ nguyên từng lượt quà độc lập để đọc chính xác số lượng hoa tặng!
+      // - Nếu là bình luận 1 điểm (!payload.isRose && !isFromNpc): gom chung các bình luận 1 điểm cùng tỉnh.
       const enqueueAndMergeSameProvince = () => {
         const prev = cameraQueueRef.current;
+
+        if (payload.isRose) {
+          const firstCommentIdx = prev.findIndex((q) => !q.isRose);
+          const next =
+            firstCommentIdx === -1
+              ? [...prev.slice(-40), singleQueueItem]
+              : [
+                  ...prev.slice(0, firstCommentIdx),
+                  singleQueueItem,
+                  ...prev.slice(firstCommentIdx),
+                ].slice(0, 45);
+          cameraQueueRef.current = next;
+          setCameraQueue(next);
+          return;
+        }
+
         if (!isFromNpc) {
           const existingIdx = prev.findIndex(
-            (q) => q.provinceId === targetProv.id && !q.isNpc
+            (q) => q.provinceId === targetProv.id && !q.isNpc && !q.isRose
           );
           if (existingIdx !== -1) {
             const next = [...prev];
@@ -1052,10 +1084,10 @@ export function useClassroomEngine() {
               ...targetItem,
               username: uniqueNames.join(', '),
               pointsAdded: targetItem.pointsAdded + pointsAdded,
-              isRose: targetItem.isRose || payload.isRose,
+              isRose: false,
               isNpc: false,
               senders: mergedSenders,
-              totalRoses: targetItem.totalRoses + roseCount,
+              totalRoses: 0,
               totalGifts: targetItem.totalGifts + 1,
             };
             cameraQueueRef.current = next;
@@ -1068,8 +1100,11 @@ export function useClassroomEngine() {
         setCameraQueue(appended);
       };
 
-      // Nếu đang trong luồng tổng kết cuối phiên -> Đẩy toàn bộ quà phát sinh vào hàng chờ cho phiên sau!
+      // Nếu đang trong luồng tổng kết cuối phiên: bỏ qua bình luận 1 điểm, chỉ giữ lại hàng chờ tặng quà (isRose = true) cho phiên sau!
       if (isSessionEndingRef.current) {
+        if (!payload.isRose) {
+          return { ok: false, reason: 'session_ending_comment_ignored' };
+        }
         enqueueAndMergeSameProvince();
         if (broadcastSync) {
           syncService.sendCommand('SEND_PROVINCE_GIFT', {
@@ -1099,15 +1134,25 @@ export function useClassroomEngine() {
         const activeFocusHasNpc = Boolean(
           curFocus.senders?.some((s) => Boolean(s.isNpc))
         );
+        const prevSenders = curFocus.senders || [];
+        const alreadyHadThisUser = prevSenders.some(
+          (s) => s.username.toLowerCase() === userKey
+        );
 
-        // Trường hợp 1: Camera ĐANG đứng ở đúng tỉnh này (chỉ gộp đối với người chơi thật, ví dụ vừa comment +1đ và tặng hoa ngay tiếp theo)
-        // Không gộp nếu là NPC để đảm bảo mỗi lần NPC chỉ xuất hiện đúng 1 người độc lập!
-        if (
+        // Trường hợp 1: Camera ĐANG đứng ở đúng tỉnh này và đang active:
+        // - Khi cùng 1 người chơi vừa comment +1đ (!curFocus.isRose) và tặng hoa ngay tiếp theo (payload.isRose):
+        //   cộng dồn vào chung 1 Avatar to duy nhất (không nhảy Avatar 2 lần) và giữ đúng số bông hoa vừa tặng (roseCount)!
+        // - Hoặc khi có thêm bình luận 1 điểm (!payload.isRose && !curFocus.isRose) vào tỉnh đang đứng.
+        // - Tuyệt đối KHÔNG gộp 2 lượt tặng hoa (curFocus.isRose && payload.isRose) vào nhau để không bao giờ bị x2 số hoa hay x2 điểm trên màn hình!
+        const canMergeIntoActiveFocus =
           !isFromNpc &&
           !activeFocusHasNpc &&
+          curProvinceStillActive &&
           curFocus.provinceId === targetProv.id &&
-          (curProvinceStillActive || cameraQueueRef.current.length === 0)
-        ) {
+          ((!curFocus.isRose && !payload.isRose) ||
+            (!curFocus.isRose && payload.isRose && alreadyHadThisUser));
+
+        if (canMergeIntoActiveFocus) {
           commitGiftTurnToProvinceAndTTS(
             targetProv.id,
             targetProv.name,
@@ -1117,16 +1162,18 @@ export function useClassroomEngine() {
             1
           );
 
-          const prevSenders = curFocus.senders || [];
-          const alreadyHadThisUser = prevSenders.some(
-            (s) => s.username.toLowerCase() === userKey
-          );
           const nextSenders = mergeContributorsByUser(prevSenders, [
             contributor,
           ]);
-          const nextPoints = (curFocus.pointsAdded || 0) + pointsAdded;
-          const nextRoses = (curFocus.totalRoses || 0) + roseCount;
-          const nextGifts = (curFocus.totalGifts || 1) + 1;
+          const nextPoints = payload.isRose
+            ? pointsAdded
+            : (curFocus.pointsAdded || 0) + pointsAdded;
+          const nextRoses = payload.isRose
+            ? roseCount
+            : curFocus.totalRoses || 0;
+          const nextGifts = payload.isRose
+            ? Math.max(1, roseCount)
+            : (curFocus.totalGifts || 1) + 1;
 
           const extendedFocus: CameraFocusState = {
             ...curFocus,
@@ -1160,7 +1207,7 @@ export function useClassroomEngine() {
           !curProvinceStillActive &&
           cameraQueueRef.current.length === 0
         ) {
-          // Trường hợp 2: Camera đang rảnh ở Map tổng -> Cộng điểm + đọc TTS + Zoom vào ngay
+          // Trường hợp 2: Camera đang rảnh -> Cộng điểm + đọc TTS + Zoom vào ngay với số hoa và số điểm chính xác
           commitGiftTurnToProvinceAndTTS(
             targetProv.id,
             targetProv.name,
@@ -1184,7 +1231,7 @@ export function useClassroomEngine() {
             isRose: payload.isRose,
             senders: [contributor],
             totalRoses: roseCount,
-            totalGifts: 1,
+            totalGifts: payload.isRose ? Math.max(1, roseCount) : 1,
             startedAt: now,
             until: now + holdMs,
           };
@@ -1198,7 +1245,7 @@ export function useClassroomEngine() {
             });
           }, 120);
         } else {
-          // Trường hợp 3: Đưa vào hàng chờ Camera
+          // Trường hợp 3: Đưa vào hàng chờ Camera (nếu là quà/hoa hồng sẽ tự động nhảy lên đầu hàng chờ!)
           enqueueAndMergeSameProvince();
         }
       } else {
@@ -1316,19 +1363,24 @@ export function useClassroomEngine() {
 
       if (!targetProvinceId) return;
 
+      const flowerCount = Math.max(1, Number(repeatCount) || 1);
+      const coinUnits = Math.max(flowerCount, Number(coins) || flowerCount);
       const baseRosePoints = Math.max(1, configRef.current.rosePoints || 5);
-      const multiplier = Math.max(1, repeatCount || coins || 1);
-      const totalPoints = baseRosePoints * multiplier;
+      const totalPoints = baseRosePoints * coinUnits;
+      const deterministicEventId = `tiktok_gift_${safeName.toLowerCase()}_${targetProvinceId}_${flowerCount}_${totalPoints}_${Math.floor(
+        Date.now() / 4200
+      )}`;
 
       executeProvinceGift(
         {
+          eventId: deterministicEventId,
           provinceId: targetProvinceId,
           username: safeName,
           avatarUrl: avatarUrl || null,
           isRose: true,
           isNpc: false,
           pointsOverride: totalPoints,
-          roseCountOverride: multiplier,
+          roseCountOverride: flowerCount,
         },
         true
       );

@@ -342,8 +342,15 @@ async function startServer() {
           data?.giftType ??
           data?.gift?.giftType ??
           data?.giftDetails?.giftType;
-        const repeatEnd = Boolean(data?.repeatEnd ?? data?.gift?.repeatEnd);
-        if (giftType === 1 && !repeatEnd) return;
+        const rawRepeatEnd = data?.repeatEnd ?? data?.gift?.repeatEnd;
+        const repeatEnd = Boolean(rawRepeatEnd);
+        if (
+          rawRepeatEnd === false ||
+          rawRepeatEnd === 0 ||
+          (giftType === 1 && !repeatEnd)
+        ) {
+          return;
+        }
         const username = extractTikTokUsername(data);
         const fallbackGift = GIFT_ID_FALLBACK[Number(data?.giftId)] || null;
         const diamondCount =
@@ -371,7 +378,15 @@ async function startServer() {
         console.log(`🎁 [TIKTOK GIFT] ${username} tặng ${giftName} x${repeatCount} (${coins} xu)`);
         broadcastSSE({
           type: 'TIKTOK_LIVE_EVENT',
-          event: { type: 'gift', username, avatarUrl, giftName, coins, repeatCount },
+          event: {
+            type: 'gift',
+            username,
+            avatarUrl,
+            giftName,
+            coins,
+            repeatCount,
+            repeatEnd: true,
+          },
         });
       };
 

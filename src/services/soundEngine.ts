@@ -934,6 +934,16 @@ class SoundService {
     return this.isSpeaking || this.ttsQueue.length > 0;
   }
 
+  public isSessionSummarySpeakingOrQueued(): boolean {
+    if (
+      this.isSpeaking &&
+      this.activeEventItem?.id?.startsWith('session_end_')
+    ) {
+      return true;
+    }
+    return this.ttsQueue.some((q) => Boolean(q.id?.startsWith('session_end_')));
+  }
+
   public isTurboBatchActive(): boolean {
     if (this.isSpeaking && this.activeEventItem?.isTurboBatch) {
       return true;
@@ -1300,12 +1310,15 @@ class SoundService {
     onDone?: () => void
   ) {
     this.latestConfig = config;
-    // Xóa các câu sự kiện chưa đọc trong hàng chờ âm thanh (các lượt quà chưa zoom đã được bảo lưu ở cameraQueue sang phiên sau)
-    // nhưng KHÔNG ngắt câu đang phát dở để người đọc đọc trọn vẹn câu hiện tại rồi đọc luôn tổng kết.
+    // Khi kết thúc phiên chơi: XÓA tất cả hàng chờ 1 điểm (comment trong hàng chờ), GIỮ LẠI hàng chờ tặng quà (isRose = true)
+    // đồng thời không ngắt câu đang phát dở để người đọc đọc trọn vẹn câu hiện tại rồi đọc luôn tổng kết.
+    const savedGiftItems = this.ttsQueue.filter((q) => Boolean(q.meta?.isRose));
     this.ttsQueue = [];
     this.playSessionEndFanfareSfx(config.sfxVolume);
 
     if (!config.ttsEnabled) {
+      this.ttsQueue = savedGiftItems;
+      this.emitEventQueue();
       if (onDone) {
         setTimeout(onDone, 3000);
       }
@@ -1323,6 +1336,8 @@ class SoundService {
     }
 
     if (cleanSentences.length === 0) {
+      this.ttsQueue = savedGiftItems;
+      this.emitEventQueue();
       if (onDone) {
         setTimeout(onDone, 2000);
       }
@@ -1340,6 +1355,11 @@ class SoundService {
         onDone: isLast ? onDone : undefined,
       });
     });
+
+    // Đưa các hàng chờ tặng quà được giữ lại xếp ngay sau câu tổng kết để đọc ở phiên kế tiếp
+    if (savedGiftItems.length > 0) {
+      this.ttsQueue.push(...savedGiftItems);
+    }
 
     this.emitEventQueue();
     this.processQueue(config);
@@ -1473,18 +1493,11 @@ class SoundService {
   ): string {
     const cleanProvince = provinceName.replace(/^TP\.\s*/i, '').trim();
     const cleanUsername = username.replace(/^NPC\s+/i, '').trim();
-    const effectiveRoses = isRose
-      ? Math.max(
-          1,
-          roseCount || Math.round(points / Math.max(1, config.rosePoints || 5))
-        )
-      : 0;
+    const effectiveRoses = isRose ? Math.max(1, Number(roseCount) || 1) : 0;
     // Chỉ coi là NPC khi gửi gói Hoa hồng / Quà coin (> 1 điểm). Nếu hỗ trợ 1 điểm thì coi như người bình thường!
     const isNpcGiftSupport = Boolean(isNpc && isRose);
-    const isMultiRose =
-      !isNpcGiftSupport &&
-      isRose &&
-      (effectiveRoses >= 2 || points >= Math.max(1, config.rosePoints || 5) * 2);
+    // Chỉ đọc mẫu câu nhiều hoa khi số lượng hoa thực tế >= 2 bông (tuyệt đối không tự suy diễn từ điểm số để tránh gửi 1 bông mà đọc 2)
+    const isMultiRose = !isNpcGiftSupport && isRose && effectiveRoses >= 2;
 
     let rawTpl = '';
     if (isNpcGiftSupport) {
@@ -1509,7 +1522,7 @@ class SoundService {
       .replace(/\[Tên\]|\[tên\]|\{name\}/gi, cleanUsername)
       .replace(
         /\[SốHoa\]|\[sốhoa\]|\[TổngHoa\]|\[Hoa\]|\{roses\}/gi,
-        String(Math.max(2, effectiveRoses))
+        String(Math.max(1, effectiveRoses))
       )
       .replace(/\[Điểm\]|\[điểm\]|\{points\}/gi, String(points))
       .replace(/\[Tỉnh\]|\[tỉnh\]|\{province\}/gi, cleanProvince)
@@ -1644,10 +1657,16 @@ class SoundService {
     if (!cleanText) return false;
 
     const now = Date.now();
+    const isGiftOrPriority = Boolean(isPriority || meta?.isRose);
 
-    // Nếu tỉnh này đã có mục đang chờ trong hàng đợi TTS (của người chơi thật) -> Gom gộp tất cả tên người chơi vào đọc chung 1 lần!
-    // (Không gom gộp NPC tự động để chu kỳ NPC luôn chỉ 1 người mỗi lần)
-    if (meta?.provinceId && meta?.provinceName && !meta.isNpc) {
+    // Chỉ gom gộp các lượt bình luận 1 điểm (!isRose, !isNpc) của người chơi thật vào cùng tỉnh.
+    // TUYỆT ĐỐI KHÔNG tự ý cộng dồn các mục tặng hoa hồng / quà (isRose) trong ttsQueue để đọc chính xác số lượng hoa tặng của từng lượt!
+    if (
+      meta?.provinceId &&
+      meta?.provinceName &&
+      !meta.isNpc &&
+      !meta.isRose
+    ) {
       const incomingNames =
         meta.usernamesList && meta.usernamesList.length > 0
           ? meta.usernamesList
@@ -1659,6 +1678,7 @@ class SoundService {
         (q) =>
           !q.isTurboBatch &&
           !q.meta?.isNpc &&
+          !q.meta?.isRose &&
           q.meta?.provinceId === meta.provinceId
       );
 
@@ -1670,35 +1690,29 @@ class SoundService {
         const nextNames = Array.from(new Set([...prevNames, ...incomingNames]));
         const prevPoints = Number(existing.meta?.pointsAdded || 1);
         const nextPoints = prevPoints + Number(meta.pointsAdded || 1);
-        const prevRoses = Number(
-          existing.meta?.totalRoses ?? (existing.meta?.isRose ? 1 : 0)
-        );
-        const nextRoses =
-          prevRoses + Number(meta.totalRoses ?? (meta.isRose ? 1 : 0));
-        const mergedIsNpc = Boolean(existing.meta?.isNpc || meta.isNpc);
 
         const mergedText = this.formatBatchedProvinceGiftSpeech(
           nextNames,
           meta.provinceName,
           nextPoints,
-          nextRoses,
+          0,
           config,
-          !mergedIsNpc,
-          mergedIsNpc
+          true,
+          false
         );
 
         this.ttsQueue[existingIdx] = {
           ...existing,
           text: mergedText,
-          isPriority: existing.isPriority || isPriority,
+          isPriority: false,
           meta: {
             ...existing.meta,
             username: nextNames.join(', '),
             usernamesList: nextNames,
             pointsAdded: nextPoints,
-            isRose: nextRoses > 0,
-            isNpc: mergedIsNpc,
-            totalRoses: nextRoses,
+            isRose: false,
+            isNpc: false,
+            totalRoses: 0,
           },
         };
         this.emitEventQueue();
@@ -1710,14 +1724,16 @@ class SoundService {
     const queueItem: TTSQueueItem = {
       id: `tts_${now}_${Math.random().toString(36).slice(2, 7)}`,
       text: cleanText,
-      isPriority,
+      isPriority: isGiftOrPriority,
       addedAt: now,
       meta: meta
         ? {
             ...meta,
             usernamesList:
               meta.usernamesList || (meta.username ? [meta.username] : []),
-            totalRoses: meta.totalRoses ?? (meta.isRose ? 1 : 0),
+            totalRoses: meta.isRose
+              ? Math.max(1, Number(meta.totalRoses) || 1)
+              : 0,
           }
         : undefined,
     };
@@ -1727,15 +1743,29 @@ class SoundService {
       Math.min(200, config.maxTtsQueueSize ?? 40)
     );
     if (this.ttsQueue.length >= maxQueueSize) {
-      this.ttsQueue = this.ttsQueue.slice(-Math.floor(maxQueueSize / 2));
+      // Nếu đầy hàng chờ, ưu tiên xóa bớt các mục bình luận 1 điểm (!isRose) trước, giữ lại các mục tặng quà
+      const nonGiftIndices = this.ttsQueue
+        .map((q, idx) => (!q.meta?.isRose && !q.isPriority ? idx : -1))
+        .filter((idx) => idx !== -1);
+      if (nonGiftIndices.length > 0) {
+        const dropSet = new Set(
+          nonGiftIndices.slice(0, Math.ceil(nonGiftIndices.length / 2))
+        );
+        this.ttsQueue = this.ttsQueue.filter((_, idx) => !dropSet.has(idx));
+      } else {
+        this.ttsQueue = this.ttsQueue.slice(-Math.floor(maxQueueSize / 2));
+      }
     }
 
-    if (isPriority) {
-      const firstNonPriority = this.ttsQueue.findIndex((q) => !q.isPriority);
-      if (firstNonPriority === -1) {
+    // Gửi quà / gửi hoa thì ưu tiên đẩy lên đầu hàng chờ đọc (trước toàn bộ hàng chờ bình luận 1 điểm)
+    if (isGiftOrPriority) {
+      const firstCommentIdx = this.ttsQueue.findIndex(
+        (q) => !q.isPriority && !q.meta?.isRose && !q.isTurboBatch
+      );
+      if (firstCommentIdx === -1) {
         this.ttsQueue.push(queueItem);
       } else {
-        this.ttsQueue.splice(firstNonPriority, 0, queueItem);
+        this.ttsQueue.splice(firstCommentIdx, 0, queueItem);
       }
     } else {
       this.ttsQueue.push(queueItem);
@@ -1867,31 +1897,31 @@ class SoundService {
 
     let nextItem = this.ttsQueue.shift()!;
 
-    // Mỗi lần bắt đầu đọc (chế độ thường, không phải mục Đọc Siêu Tốc):
-    // kiểm tra toàn bộ hàng chờ TTS xem còn ai vào CÙNG TỈNH này không,
-    // nếu có thì rút hết ra đọc 1 lúc tất cả các tên cho hết nhanh hàng chờ!
+    // Mỗi lần bắt đầu đọc: chỉ gộp các mục bình luận 1 điểm (!isRose, !isNpc) vào cùng tỉnh.
+    // Các mục tặng hoa hồng / quà (isRose = true) hoặc NPC được giữ nguyên từng lượt để đọc chính xác số lượng hoa tặng!
     if (
       !nextItem.isTurboBatch &&
+      !nextItem.meta?.isRose &&
+      !nextItem.meta?.isNpc &&
       nextItem.meta?.provinceId &&
       nextItem.meta?.provinceName
     ) {
       const targetProvId = nextItem.meta.provinceId;
       const sameProvItems = this.ttsQueue.filter(
-        (q) => !q.isTurboBatch && q.meta?.provinceId === targetProvId
+        (q) =>
+          !q.isTurboBatch &&
+          !q.meta?.isRose &&
+          !q.meta?.isNpc &&
+          q.meta?.provinceId === targetProvId
       );
       if (sameProvItems.length > 0) {
-        this.ttsQueue = this.ttsQueue.filter(
-          (q) => q.isTurboBatch || q.meta?.provinceId !== targetProvId
-        );
+        const pickedIds = new Set(sameProvItems.map((q) => q.id));
+        this.ttsQueue = this.ttsQueue.filter((q) => !pickedIds.has(q.id));
         const allNames = new Set<string>(
           nextItem.meta.usernamesList ||
             (nextItem.meta.username ? [nextItem.meta.username] : [])
         );
         let totalPts = Number(nextItem.meta.pointsAdded || 1);
-        let totalRoses = Number(
-          nextItem.meta.totalRoses ?? (nextItem.meta.isRose ? 1 : 0)
-        );
-        let anyNpc = Boolean(nextItem.meta.isNpc);
 
         for (const extra of sameProvItems) {
           const extraNames =
@@ -1901,10 +1931,6 @@ class SoundService {
             allNames.add(n);
           }
           totalPts += Number(extra.meta?.pointsAdded || 1);
-          totalRoses += Number(
-            extra.meta?.totalRoses ?? (extra.meta?.isRose ? 1 : 0)
-          );
-          if (extra.meta?.isNpc) anyNpc = true;
         }
 
         const mergedList = Array.from(allNames);
@@ -1912,10 +1938,10 @@ class SoundService {
           mergedList,
           nextItem.meta.provinceName,
           totalPts,
-          totalRoses,
+          0,
           config,
           true,
-          anyNpc
+          false
         );
 
         nextItem = {
@@ -1926,9 +1952,9 @@ class SoundService {
             username: mergedList.join(', '),
             usernamesList: mergedList,
             pointsAdded: totalPts,
-            totalRoses,
-            isRose: totalRoses > 0,
-            isNpc: anyNpc,
+            totalRoses: 0,
+            isRose: false,
+            isNpc: false,
           },
         };
       }

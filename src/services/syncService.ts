@@ -76,6 +76,7 @@ class LiveSyncService {
   private reconnectWsTimer: ReturnType<typeof setTimeout> | null = null;
   private localSseFallback: EventSource | null = null;
   private recentTikTokEventKeys = new Map<string, number>();
+  private pendingLegacyComboEchoKeys = new Map<string, number>();
   private tiktokLogs: string[] = [];
   private tiktokLogListeners = new Set<(logs: string[]) => void>();
   private roomInfoListeners = new Set<
@@ -120,11 +121,16 @@ class LiveSyncService {
     repeatCount?: number;
     comboCount?: number;
     likeCount?: number;
+    repeatEnd?: boolean;
   }) {
     const now = Date.now();
     for (const [k, t] of this.recentTikTokEventKeys.entries()) {
-      if (now - t > 3000) this.recentTikTokEventKeys.delete(k);
+      if (now - t > 3500) this.recentTikTokEventKeys.delete(k);
     }
+    for (const [k, t] of this.pendingLegacyComboEchoKeys.entries()) {
+      if (now - t > 7000) this.pendingLegacyComboEchoKeys.delete(k);
+    }
+
     const normalizedGiftOrComment = (
       ev.comment ||
       ev.giftName ||
@@ -132,18 +138,34 @@ class LiveSyncService {
     )
       .trim()
       .toLowerCase();
-    const dedupKey = `${ev.type}:${(ev.username || '').trim().toLowerCase()}:${normalizedGiftOrComment}:${ev.coins || 0}:${ev.repeatCount || ev.comboCount || 0}`;
+    const cleanCount = Math.max(1, Number(ev.repeatCount ?? ev.comboCount ?? 1) || 1);
+    const cleanCoins = Math.max(1, Number(ev.coins ?? cleanCount) || 1);
+    const dedupKey = `${ev.type}:${(ev.username || '').trim().toLowerCase()}:${normalizedGiftOrComment}:${cleanCoins}:${cleanCount}`;
+
+    // 1. Chặn trùng lặp khi sự kiện đi qua cả WebSocket 8080 lẫn Cloud Webhook SSE (< 2500ms)
     const prevAt = this.recentTikTokEventKeys.get(dedupKey);
-    if (prevAt && now - prevAt < 2200) {
+    if (prevAt && now - prevAt < 2500) {
       return;
     }
     this.recentTikTokEventKeys.set(dedupKey, now);
+
+    // 2. Nếu bản server.js cũ trên máy người dùng chưa có cờ repeatEnd: true,
+    // khi người xem tặng 1 Hoa hồng TikTok sẽ bắn 1 gói lúc bấm (t=0s) và 1 gói kết thúc combo (t≈3.2s..5s).
+    // Tiêu thụ và bỏ qua gói lặp kết thúc combo đó để 1 bông hoa không bị tính thành 2 bông!
+    if (ev.type === 'gift' && ev.repeatEnd !== true) {
+      const echoAt = this.pendingLegacyComboEchoKeys.get(dedupKey);
+      if (echoAt && now - echoAt < 6500) {
+        this.pendingLegacyComboEchoKeys.delete(dedupKey);
+        return;
+      }
+      this.pendingLegacyComboEchoKeys.set(dedupKey, now);
+    }
 
     if (ev.type === 'chat') {
       this.appendTikTokLog(`💬 [CHAT] ${ev.username}: ${ev.comment}`);
     } else if (ev.type === 'gift') {
       this.appendTikTokLog(
-        `🎁 [GIFT] ${ev.username} tặng ${ev.giftName} (${ev.coins || 1} xu)`
+        `🎁 [GIFT] ${ev.username} tặng ${ev.giftName} x${cleanCount} (${cleanCoins} xu)`
       );
     } else if (ev.type === 'like') {
       this.appendTikTokLog(`❤️ [LIKE] ${ev.username} thả ${ev.likeCount || 1} tim`);
@@ -153,7 +175,13 @@ class LiveSyncService {
       this.appendTikTokLog(`👋 [VÀO PHÒNG] ${ev.username} đã vào phòng Live`);
     }
 
-    this.tiktokListeners.forEach((fn) => fn(ev));
+    this.tiktokListeners.forEach((fn) =>
+      fn({
+        ...ev,
+        coins: cleanCoins,
+        repeatCount: cleanCount,
+      })
+    );
   }
 
   private initServerRelay() {
@@ -390,12 +418,6 @@ class LiveSyncService {
     // Đảm bảo kết nối WebSocket tới Local Bridge 8080 nếu chưa mở
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.connectWebSocket(this.lastWsUrl || 'ws://127.0.0.1:8080');
-    } else {
-      try {
-        this.ws.send(JSON.stringify({ type: 'CONNECT_TIKTOK', username: clean }));
-      } catch {
-        // Ignore
-      }
     }
 
     // 1. Ưu tiên gọi trực tiếp Local Node.js Bridge (http://127.0.0.1:8080/connect) - hoạt động cả trên GitHub Pages lẫn Local
@@ -418,22 +440,28 @@ class LiveSyncService {
         return { ok: false, error: localData.error };
       }
     } catch {
-      // Nếu Local Bridge 8080 chưa bật hoặc đang chạy trên Cloud Server
+      // Nếu Local Bridge 8080 chưa có route /connect hoặc chưa bật
     }
 
-    // Nếu đang mở trên GitHub Pages mà ws://localhost:8080 đã kết nối (bản server.js cũ chưa có /connect)
-    if (this.isStaticHost()) {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.setStatus('connected');
-        return { ok: true, roomId: 'WS-8080' };
+    // Nếu ws://127.0.0.1:8080 đang mở (bản server.js cũ chỉ nhận lệnh qua WS) -> Gửi lệnh qua WS và KHÔNG gọi thêm Cloud để tránh kết nối đúp 2 nơi!
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      try {
+        this.ws.send(JSON.stringify({ type: 'CONNECT_TIKTOK', username: clean }));
+      } catch {
+        // Ignore
       }
+      this.setStatus('connected');
+      return { ok: true, roomId: 'WS-8080' };
+    }
+
+    if (this.isStaticHost()) {
       return {
         ok: false,
         error: 'Chưa kết nối được server.js ở máy! Hãy mở CMD chạy: node server.js',
       };
     }
 
-    // 2. Kết nối qua Backend Server tích hợp sẵn (khi chạy trên AI Studio / Node server)
+    // 2. Kết nối qua Backend Server tích hợp sẵn (khi chạy trên AI Studio / Node server mà không bật Local Bridge 8080)
     try {
       const res = await fetch('/api/tiktok/connect', {
         method: 'POST',
@@ -617,6 +645,17 @@ class LiveSyncService {
       raw.type === 'member'
     ) {
       const normalizedType = raw.type === 'comment' ? 'chat' : raw.type;
+      if (
+        normalizedType === 'gift' &&
+        (raw.repeatEnd === false ||
+          raw.repeatEnd === 0 ||
+          raw.data?.repeatEnd === false ||
+          raw.data?.repeatEnd === 0 ||
+          raw.raw?.repeatEnd === false ||
+          raw.raw?.repeatEnd === 0)
+      ) {
+        return;
+      }
       const normalized = {
         ...raw,
         type: normalizedType,
@@ -649,7 +688,12 @@ class LiveSyncService {
       rawEv === 'follow' ||
       rawEv === 'member'
     ) {
-      if (rawEv === 'gift' && d.giftType === 1 && d.repeatEnd === false) {
+      if (
+        rawEv === 'gift' &&
+        (d.repeatEnd === false ||
+          d.repeatEnd === 0 ||
+          (d.giftType === 1 && !d.repeatEnd))
+      ) {
         return;
       }
       const username = this.extractUsername(raw);
@@ -659,7 +703,7 @@ class LiveSyncService {
         d.giftDetails?.diamondCount ??
         d.gift?.diamondCount ??
         1;
-      const repeatCount = d.repeatCount ?? d.comboCount ?? 1;
+      const repeatCount = Math.max(1, Number(d.repeatCount ?? d.comboCount ?? 1) || 1);
 
       this.emitDeduplicatedTikTokEvent({
         type: rawEv,
@@ -672,7 +716,9 @@ class LiveSyncService {
           d.gift?.name ||
           d.extendedGiftInfo?.name ||
           'Quà tặng',
-        coins: Math.max(1, Number(diamondCount) * Number(repeatCount)),
+        coins: Math.max(1, Number(diamondCount) * repeatCount),
+        repeatCount,
+        repeatEnd: true,
         likeCount: Math.max(
           1,
           Number(d.likeCount ?? d.count ?? d.unmergedLikeCount ?? 1)
