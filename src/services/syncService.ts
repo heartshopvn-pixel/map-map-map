@@ -10,6 +10,7 @@ type TikTokEventListener = (event: {
   profilePictureUrl?: string | null;
   comment?: string;
   giftName?: string;
+  diamondCount?: number;
   coins?: number;
   repeatCount?: number;
   comboCount?: number;
@@ -117,6 +118,7 @@ class LiveSyncService {
     profilePictureUrl?: string | null;
     comment?: string;
     giftName?: string;
+    diamondCount?: number;
     coins?: number;
     repeatCount?: number;
     comboCount?: number;
@@ -698,11 +700,15 @@ class LiveSyncService {
       }
       const username = this.extractUsername(raw);
       const avatarUrl = this.extractAvatar(d) || this.extractAvatar(raw);
-      const diamondCount =
-        d.diamondCount ??
-        d.giftDetails?.diamondCount ??
-        d.gift?.diamondCount ??
-        1;
+      const diamondCount = Math.max(
+        1,
+        Number(
+          d.diamondCount ??
+            d.giftDetails?.diamondCount ??
+            d.gift?.diamondCount ??
+            1
+        ) || 1
+      );
       const repeatCount = Math.max(1, Number(d.repeatCount ?? d.comboCount ?? 1) || 1);
 
       this.emitDeduplicatedTikTokEvent({
@@ -716,7 +722,8 @@ class LiveSyncService {
           d.gift?.name ||
           d.extendedGiftInfo?.name ||
           'Quà tặng',
-        coins: Math.max(1, Number(diamondCount) * repeatCount),
+        diamondCount,
+        coins: Math.max(1, diamondCount * repeatCount),
         repeatCount,
         repeatEnd: true,
         likeCount: Math.max(

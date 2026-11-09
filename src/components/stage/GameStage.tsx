@@ -10,7 +10,10 @@ import {
   resolveAvatarForUsername,
   SessionEndSummaryState,
 } from '../../hooks/useClassroomEngine';
-import { soundEngine } from '../../services/soundEngine';
+import {
+  EventTtsQueueSnapshot,
+  soundEngine,
+} from '../../services/soundEngine';
 import {
   buildVietnamProvincePolygons,
   MAP_RENDER_OFFSET_X,
@@ -41,6 +44,7 @@ interface GameStageProps {
   npcAvatars?: string[];
   sessionEndSummary?: SessionEndSummaryState | null;
   cameraQueueCount?: number;
+  eventTtsQueue?: EventTtsQueueSnapshot;
   onSelectProvince?: (provinceId: string) => void;
   onUpdateConfig?: (patch: Partial<GameConfig>) => void;
   onResetAllProvinces?: () => void;
@@ -117,16 +121,15 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
       scaleY: 1,
     };
 
-  const currentScale = Math.max(0.35, Math.min(2.5, pos.scale ?? 1));
-  const currentScaleX = Math.max(0.35, Math.min(3.0, pos.scaleX ?? 1));
-  const currentScaleY = Math.max(0.35, Math.min(3.0, pos.scaleY ?? 1));
+  const currentScaleX = Math.max(0.35, Math.min(3.2, pos.scaleX ?? 1));
+  const currentScaleY = Math.max(0.35, Math.min(3.2, pos.scaleY ?? 1));
 
   const computedWidthPx = Math.max(
-    90,
+    84,
     Math.round(baseWidthPx * currentScaleX)
   );
   const computedMinHeightPx = Math.max(
-    36,
+    34,
     Math.round(baseHeightPx * currentScaleY)
   );
 
@@ -136,10 +139,10 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
     pointerY: number;
     startX: number;
     startY: number;
-    startScale: number;
     startScaleX: number;
     startScaleY: number;
-    dirSign: number;
+    dirSignX: number;
+    dirSignY: number;
   } | null>(null);
   const [interactionMode, setInteractionMode] = useState<
     'idle' | 'move' | 'resize' | 'resize_x' | 'resize_y'
@@ -156,10 +159,10 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
       pointerY: e.clientY,
       startX: pos.x,
       startY: pos.y,
-      startScale: currentScale,
       startScaleX: currentScaleX,
       startScaleY: currentScaleY,
-      dirSign: 1,
+      dirSignX: 1,
+      dirSignY: 1,
     };
     setInteractionMode('move');
   };
@@ -178,14 +181,14 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
     }
     dragStartRef.current = {
       mode: 'resize',
-      pointerX: e.clientX * cornerDirX,
-      pointerY: e.clientY * cornerDirY,
+      pointerX: e.clientX,
+      pointerY: e.clientY,
       startX: pos.x,
       startY: pos.y,
-      startScale: currentScale,
       startScaleX: currentScaleX,
       startScaleY: currentScaleY,
-      dirSign: 1,
+      dirSignX: cornerDirX,
+      dirSignY: cornerDirY,
     };
     setInteractionMode('resize');
   };
@@ -208,10 +211,10 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
       pointerY: e.clientY,
       startX: pos.x,
       startY: pos.y,
-      startScale: currentScale,
       startScaleX: currentScaleX,
       startScaleY: currentScaleY,
-      dirSign,
+      dirSignX: dirSign,
+      dirSignY: dirSign,
     };
     setInteractionMode(axis === 'x' ? 'resize_x' : 'resize_y');
   };
@@ -236,7 +239,7 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
           [elementKey]: {
             x: nextX,
             y: nextY,
-            scale: dragStartRef.current.startScale,
+            scale: 1,
             scaleX: dragStartRef.current.startScaleX,
             scaleY: dragStartRef.current.startScaleY,
           },
@@ -245,13 +248,13 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
     } else if (dragStartRef.current.mode === 'resize_x') {
       const dx =
         ((e.clientX - dragStartRef.current.pointerX) *
-          dragStartRef.current.dirSign) /
+          dragStartRef.current.dirSignX) /
         (scaleFactor || 1);
-      const deltaX = dx / Math.max(110, baseWidthPx * 0.75);
+      const deltaX = dx / Math.max(100, baseWidthPx * 0.75);
       const nextScaleX = Number(
         Math.max(
           0.35,
-          Math.min(3.0, dragStartRef.current.startScaleX + deltaX)
+          Math.min(3.2, dragStartRef.current.startScaleX + deltaX)
         ).toFixed(2)
       );
       onUpdateConfig({
@@ -261,7 +264,7 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
           [elementKey]: {
             x: dragStartRef.current.startX,
             y: dragStartRef.current.startY,
-            scale: dragStartRef.current.startScale,
+            scale: 1,
             scaleX: nextScaleX,
             scaleY: dragStartRef.current.startScaleY,
           },
@@ -270,13 +273,13 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
     } else if (dragStartRef.current.mode === 'resize_y') {
       const dy =
         ((e.clientY - dragStartRef.current.pointerY) *
-          dragStartRef.current.dirSign) /
+          dragStartRef.current.dirSignY) /
         (scaleFactor || 1);
-      const deltaY = dy / Math.max(80, baseHeightPx * 0.85);
+      const deltaY = dy / Math.max(75, baseHeightPx * 0.85);
       const nextScaleY = Number(
         Math.max(
           0.35,
-          Math.min(3.0, dragStartRef.current.startScaleY + deltaY)
+          Math.min(3.2, dragStartRef.current.startScaleY + deltaY)
         ).toFixed(2)
       );
       onUpdateConfig({
@@ -286,25 +289,35 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
           [elementKey]: {
             x: dragStartRef.current.startX,
             y: dragStartRef.current.startY,
-            scale: dragStartRef.current.startScale,
+            scale: 1,
             scaleX: dragStartRef.current.startScaleX,
             scaleY: nextScaleY,
           },
         },
       });
     } else {
-      const signX = dragStartRef.current.pointerX >= 0 ? 1 : -1;
-      const signY = dragStartRef.current.pointerY >= 0 ? 1 : -1;
-      const startAbsX = Math.abs(dragStartRef.current.pointerX);
-      const startAbsY = Math.abs(dragStartRef.current.pointerY);
-
-      const dx = ((e.clientX - startAbsX) * signX) / (scaleFactor || 1);
-      const dy = ((e.clientY - startAbsY) * signY) / (scaleFactor || 1);
-      const delta = (dx + dy) / 180;
-      const nextScale = Number(
+      // Kéo góc: chỉnh đồng thời chiều ngang (scaleX) và chiều dọc (scaleY) của khung,
+      // tuyệt đối không dùng CSS scale để các nội dung bên trong tự sắp xếp theo kích thước khung!
+      const dx =
+        ((e.clientX - dragStartRef.current.pointerX) *
+          dragStartRef.current.dirSignX) /
+        (scaleFactor || 1);
+      const dy =
+        ((e.clientY - dragStartRef.current.pointerY) *
+          dragStartRef.current.dirSignY) /
+        (scaleFactor || 1);
+      const deltaX = dx / Math.max(100, baseWidthPx * 0.75);
+      const deltaY = dy / Math.max(75, baseHeightPx * 0.85);
+      const nextScaleX = Number(
         Math.max(
           0.35,
-          Math.min(2.5, dragStartRef.current.startScale + delta)
+          Math.min(3.2, dragStartRef.current.startScaleX + deltaX)
+        ).toFixed(2)
+      );
+      const nextScaleY = Number(
+        Math.max(
+          0.35,
+          Math.min(3.2, dragStartRef.current.startScaleY + deltaY)
         ).toFixed(2)
       );
 
@@ -315,9 +328,9 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
           [elementKey]: {
             x: dragStartRef.current.startX,
             y: dragStartRef.current.startY,
-            scale: nextScale,
-            scaleX: dragStartRef.current.startScaleX,
-            scaleY: dragStartRef.current.startScaleY,
+            scale: 1,
+            scaleX: nextScaleX,
+            scaleY: nextScaleY,
           },
         },
       });
@@ -358,8 +371,8 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
         width: `${computedWidthPx}px`,
         minHeight: `${computedMinHeightPx}px`,
         transformOrigin,
-        // Chỉ dùng currentScale (tỉ lệ đều) cho transform để chữ/icon không bị méo khi kéo ngang/dọc
-        transform: `translate3d(${pos.x}px, ${pos.y}px, 0px) scale(${currentScale})`,
+        // Không dùng CSS scale(): thay đổi kích thước ngang/dọc sẽ tự động sắp xếp lại các nội dung bên trong!
+        transform: `translate3d(${pos.x}px, ${pos.y}px, 0px)`,
       }}
     >
       {config.layoutEditMode && (
@@ -371,29 +384,28 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
                 : 'bg-amber-400 text-stone-950'
             }`}
           >
-            ✥ {label} • Cỡ {Math.round(currentScale * 100)}% ({computedWidthPx}×
-            {computedMinHeightPx}px)
+            ✥ {label} • Khung {computedWidthPx}×{computedMinHeightPx}px
           </div>
 
-          {/* 4 Nút kéo ở 4 Góc (Scale đều) */}
+          {/* 4 Nút kéo ở 4 Góc (Chỉnh cả chiều ngang & dọc để tự sắp xếp nội dung) */}
           <div
             onPointerDown={(e) => handleResizePointerDown(-1, -1, e)}
-            title="Kéo góc để phóng to/thu nhỏ đều"
+            title="Kéo góc để chỉnh kích thước ngang & dọc (tự sắp xếp nội dung)"
             className="absolute -top-2 -left-2 z-50 w-4 h-4 rounded-full bg-emerald-400 border-2 border-stone-950 cursor-nwse-resize shadow-md"
           />
           <div
             onPointerDown={(e) => handleResizePointerDown(1, -1, e)}
-            title="Kéo góc để phóng to/thu nhỏ đều"
+            title="Kéo góc để chỉnh kích thước ngang & dọc (tự sắp xếp nội dung)"
             className="absolute -top-2 -right-2 z-50 w-4 h-4 rounded-full bg-emerald-400 border-2 border-stone-950 cursor-nesw-resize shadow-md"
           />
           <div
             onPointerDown={(e) => handleResizePointerDown(-1, 1, e)}
-            title="Kéo góc để phóng to/thu nhỏ đều"
+            title="Kéo góc để chỉnh kích thước ngang & dọc (tự sắp xếp nội dung)"
             className="absolute -bottom-2 -left-2 z-50 w-4 h-4 rounded-full bg-emerald-400 border-2 border-stone-950 cursor-nesw-resize shadow-md"
           />
           <div
             onPointerDown={(e) => handleResizePointerDown(1, 1, e)}
-            title="Kéo góc để phóng to/thu nhỏ đều"
+            title="Kéo góc để chỉnh kích thước ngang & dọc (tự sắp xếp nội dung)"
             className="absolute -bottom-2.5 -right-2.5 z-50 w-5 h-5 rounded-full bg-emerald-400 border-2 border-stone-950 cursor-nwse-resize shadow-lg flex items-center justify-center text-[9px] font-black text-stone-950"
           >
             ⤡
@@ -442,7 +454,7 @@ export const GameStage: React.FC<GameStageProps> = ({
   cameraFocus,
   npcAvatars = DEFAULT_NPC_AVATARS,
   sessionEndSummary = null,
-  cameraQueueCount = 0,
+  eventTtsQueue,
   onSelectProvince,
   onUpdateConfig,
   onSessionTimeUp,
@@ -450,12 +462,25 @@ export const GameStage: React.FC<GameStageProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [stageScale, setStageScale] = useState(1);
   const [bgmNeedsUnlock, setBgmNeedsUnlock] = useState(false);
+  const [liveQueueSnap, setLiveQueueSnap] = useState<EventTtsQueueSnapshot>(
+    () => eventTtsQueue || soundEngine.getEventQueueSnapshot()
+  );
 
   useEffect(() => {
+    if (eventTtsQueue) {
+      setLiveQueueSnap(eventTtsQueue);
+    }
+  }, [eventTtsQueue]);
+
+  useEffect(() => {
+    const unsubQueue = soundEngine.subscribeEventQueue((snap) => {
+      setLiveQueueSnap(snap);
+    });
     const unsubBgm = soundEngine.subscribeBgmState((snap) => {
       setBgmNeedsUnlock(Boolean(snap.isPlaying && snap.needsUnlock));
     });
     return () => {
+      unsubQueue();
       unsubBgm();
     };
   }, []);
@@ -1627,9 +1652,12 @@ export const GameStage: React.FC<GameStageProps> = ({
                               'Người chơi'}
                         </div>
                         <div className="text-[10px] text-teal-200/80 break-words leading-tight">
-                          {(cameraFocus.totalRoses || 0) > 0 ||
-                          latestSender?.isRose ||
-                          thrownAvatars[0]?.isRose
+                          {cameraFocus.isSpecialGift ||
+                          latestSender?.isSpecialGift
+                            ? 'tặng 1 món quà đặc biệt'
+                            : (cameraFocus.totalRoses || 0) > 0 ||
+                              latestSender?.isRose ||
+                              thrownAvatars[0]?.isRose
                             ? 'đã gửi Hoa hồng'
                             : `bình luận về ${
                                 cameraFocus.provinceName || 'Hà Nội'
@@ -1640,9 +1668,12 @@ export const GameStage: React.FC<GameStageProps> = ({
 
                     <div className="flex items-center gap-1.5 shrink-0">
                       <div className="text-2xl leading-none flex items-center justify-center">
-                        {(cameraFocus.totalRoses || 0) > 0 ||
-                        latestSender?.isRose ||
-                        thrownAvatars[0]?.isRose
+                        {cameraFocus.isSpecialGift ||
+                        latestSender?.isSpecialGift
+                          ? '🎁'
+                          : (cameraFocus.totalRoses || 0) > 0 ||
+                            latestSender?.isRose ||
+                            thrownAvatars[0]?.isRose
                           ? renderIconContent(
                               config.roseIconUrl,
                               '🌹',
@@ -1658,10 +1689,15 @@ export const GameStage: React.FC<GameStageProps> = ({
                         x
                         {Math.max(
                           1,
-                          cameraFocus.totalRoses ||
-                            cameraFocus.totalGifts ||
-                            activeBatchedSenders.length ||
-                            1
+                          cameraFocus.isSpecialGift ||
+                            latestSender?.isSpecialGift
+                            ? cameraFocus.giftCoins ||
+                                latestSender?.giftCoins ||
+                                2
+                            : cameraFocus.totalRoses ||
+                                cameraFocus.totalGifts ||
+                                activeBatchedSenders.length ||
+                                1
                         )}
                       </span>
                     </div>
@@ -1869,6 +1905,188 @@ export const GameStage: React.FC<GameStageProps> = ({
                   </div>
                 </div>
               )}
+            </DraggableLayoutBox>
+          )}
+
+          {/* =====================================================================
+              5B. BẢNG DANH SÁCH HÀNG CHỜ EVENT CHỜ ĐỌC (`eventQueueBoard`):
+                  - Chỉ chứa đơn giản tên người chơi nếu họ comment hoặc tặng quà
+                  - Các sự kiện âm thanh khác (nói vu vơ, chào khách, khích lệ hoa hồng...) ghi ngắn gọn 2-3 chữ
+                  - Quà tặng luôn đẩy thẳng lên đầu danh sách + Highlight nổi bật!
+                  - Chỉnh chiều ngang/dọc tự động sắp xếp nội dung bên trong (không dùng scale)
+             ===================================================================== */}
+          {isElementVisible('eventQueueBoard') && (
+            <DraggableLayoutBox
+              elementKey="eventQueueBoard"
+              label="Bảng Hàng Chờ Event Đọc"
+              config={config}
+              scaleFactor={stageScale}
+              baseWidthPx={142}
+              baseHeightPx={116}
+              transformOrigin="top left"
+              onUpdateConfig={onUpdateConfig}
+              baseClassName="absolute left-3.5 top-[312px] z-30"
+            >
+              {({ widthPx, minHeightPx }) => {
+                const rawPending = liveQueueSnap.detailedQueue || [];
+                const giftItems = rawPending.filter((q) =>
+                  Boolean(q.meta?.isRose || q.meta?.isSpecialGift)
+                );
+                const otherItems = rawPending.filter(
+                  (q) => !q.meta?.isRose && !q.meta?.isSpecialGift
+                );
+                const sortedQueue = [...giftItems, ...otherItems];
+
+                const formatShortRowLabel = (
+                  item: EventTtsQueueSnapshot['detailedQueue'][number]
+                ): { text: string; isGift: boolean; isSpecial: boolean } => {
+                  const isSpecial = Boolean(item.meta?.isSpecialGift);
+                  const isGift = Boolean(item.meta?.isRose || isSpecial);
+                  const cleanUser = (item.meta?.username || '')
+                    .replace(/^NPC\s+/i, '')
+                    .trim();
+
+                  if (isSpecial) {
+                    return {
+                      text: `🎁 ${cleanUser || 'Quà ĐB'}`,
+                      isGift: true,
+                      isSpecial: true,
+                    };
+                  }
+                  if (isGift) {
+                    return {
+                      text: `🌹 ${cleanUser || 'Tặng hoa'}`,
+                      isGift: true,
+                      isSpecial: false,
+                    };
+                  }
+                  if (item.meta?.provinceId && cleanUser) {
+                    return {
+                      text: cleanUser,
+                      isGift: false,
+                      isSpecial: false,
+                    };
+                  }
+                  const fallbackShort =
+                    item.meta?.shortLabel ||
+                    (item.isSessionSummary
+                      ? '🏆 Tổng kết'
+                      : item.isTurboBatch
+                      ? '⚡ Siêu tốc'
+                      : item.id.startsWith('round_start_')
+                      ? '🔔 Vòng mới'
+                      : item.id.startsWith('welcome_')
+                      ? '👋 Chào khách'
+                      : '💬 Nói vu vơ');
+                  return {
+                    text: fallbackShort,
+                    isGift: false,
+                    isSpecial: false,
+                  };
+                };
+
+                const activeRow = liveQueueSnap.activeItem
+                  ? formatShortRowLabel(liveQueueSnap.activeItem)
+                  : null;
+                const waitingRows = sortedQueue.map((item) => ({
+                  id: item.id,
+                  ...formatShortRowLabel(item),
+                }));
+
+                // Tự động tính số dòng và số cột hiển thị dựa trên kích thước chỉnh ngang/dọc của bảng
+                const columnsCount = widthPx >= 235 ? 2 : 1;
+                const maxRowsPerCol = Math.max(
+                  2,
+                  Math.floor((minHeightPx - 28) / 21)
+                );
+                const maxVisibleItems = maxRowsPerCol * columnsCount;
+
+                const demoRows =
+                  !activeRow && waitingRows.length === 0 && config.layoutEditMode
+                    ? [
+                        {
+                          id: 'demo_gift',
+                          text: '🌹 Minh Khang',
+                          isGift: true,
+                          isSpecial: false,
+                        },
+                        {
+                          id: 'demo_join',
+                          text: '👋 Chào khách',
+                          isGift: false,
+                          isSpecial: false,
+                        },
+                        {
+                          id: 'demo_cmt',
+                          text: 'Tuấn Anh',
+                          isGift: false,
+                          isSpecial: false,
+                        },
+                      ]
+                    : waitingRows;
+
+                return (
+                  <div
+                    style={{ minHeight: `${minHeightPx}px` }}
+                    className="w-full p-2 rounded-xl bg-[#071c22]/92 border border-teal-700/70 backdrop-blur-md shadow-xl flex flex-col justify-start gap-1 overflow-hidden"
+                  >
+                    {/* Header nhỏ gọn */}
+                    <div className="flex items-center justify-between gap-1 border-b border-teal-800/70 pb-0.5 px-0.5">
+                      <span className="text-[9px] font-black uppercase tracking-wider text-amber-300 truncate">
+                        🔊 Chờ Đọc
+                      </span>
+                      <span className="px-1.5 py-0.1 rounded-full bg-teal-950 border border-teal-700/60 font-mono text-[8.5px] font-extrabold text-emerald-300 shrink-0">
+                        {waitingRows.length + (activeRow ? 1 : 0)}
+                      </span>
+                    </div>
+
+                    {/* Danh sách 1 dòng ngắn gọn (2-3 chữ), Quà đẩy lên đầu + Highlight */}
+                    <div
+                      style={{
+                        gridTemplateColumns:
+                          columnsCount > 1
+                            ? 'repeat(2, minmax(0, 1fr))'
+                            : 'minmax(0, 1fr)',
+                      }}
+                      className="grid gap-1 content-start flex-1 overflow-hidden"
+                    >
+                      {activeRow && (
+                        <div
+                          className={`px-1.5 py-0.5 rounded-md text-[10px] font-extrabold truncate flex items-center gap-1 border ${
+                            activeRow.isGift
+                              ? 'bg-gradient-to-r from-rose-500/45 via-amber-500/40 to-rose-500/35 border-amber-300 text-amber-100 shadow-[0_0_10px_rgba(251,191,36,0.45)]'
+                              : 'bg-emerald-500/25 border-emerald-400/70 text-emerald-200'
+                          }`}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                          <span className="truncate">{activeRow.text}</span>
+                        </div>
+                      )}
+
+                      {demoRows
+                        .slice(0, Math.max(1, maxVisibleItems - (activeRow ? 1 : 0)))
+                        .map((row) => (
+                          <div
+                            key={row.id}
+                            className={`px-1.5 py-0.5 rounded-md text-[10px] truncate border ${
+                              row.isGift
+                                ? 'bg-gradient-to-r from-amber-500/35 to-rose-500/35 border-amber-400/90 text-amber-200 font-black shadow-[0_0_8px_rgba(245,158,11,0.35)]'
+                                : 'bg-[#0b2730]/90 border-teal-800/50 text-stone-200 font-bold'
+                            }`}
+                          >
+                            {row.text}
+                          </div>
+                        ))}
+
+                      {!activeRow && demoRows.length === 0 && (
+                        <div className="text-[9.5px] font-semibold text-teal-300/60 italic px-1 py-1 truncate">
+                          Trống
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              }}
             </DraggableLayoutBox>
           )}
 

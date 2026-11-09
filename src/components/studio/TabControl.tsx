@@ -51,7 +51,9 @@ interface TabControlProps {
     specificProvinceId?: string,
     customUsername?: string,
     isNpc?: boolean,
-    roseCountOverride?: number
+    roseCountOverride?: number,
+    isSpecialGift?: boolean,
+    giftCoinsOverride?: number
   ) => void;
   onTriggerBatchSameProvince: (
     provinceId?: string,
@@ -138,19 +140,31 @@ export const TabControl: React.FC<TabControlProps> = ({
       badge: string;
       text: string;
       isTurbo?: boolean;
+      isGift?: boolean;
     }> = [];
 
     for (const q of eventTtsQueue.detailedQueue) {
       const prov = q.meta?.provinceName?.replace(/^TP\.\s*/i, '');
       const user = q.meta?.username;
+      const isSpecial = Boolean(q.meta?.isSpecialGift);
+      const isGift = Boolean(q.meta?.isRose || isSpecial);
       items.push({
         id: q.id,
-        badge: q.isTurboBatch ? '⚡ Siêu tốc' : prov ? `🔊 ${prov}` : '🔊 Âm thanh',
+        badge: q.isTurboBatch
+          ? '⚡ Siêu tốc'
+          : isSpecial
+          ? `🎁 ${prov || 'Quà ĐB'}`
+          : isGift
+          ? `🌹 ${prov || 'Hoa'}`
+          : prov
+          ? `🔊 ${prov}`
+          : q.meta?.shortLabel || '🔊 Âm thanh',
         text:
           user && prov && !q.isTurboBatch
             ? `${user} ➔ ${prov} (+${q.meta?.pointsAdded || 1}đ)`
             : q.text,
         isTurbo: Boolean(q.isTurboBatch),
+        isGift,
       });
     }
 
@@ -160,6 +174,7 @@ export const TabControl: React.FC<TabControlProps> = ({
         id: cam.id,
         badge: `📍 ${cleanProv}`,
         text: `${cam.username} gửi +${cam.pointsAdded}đ về ${cleanProv}`,
+        isGift: Boolean(cam.isRose),
       });
     }
 
@@ -195,7 +210,12 @@ export const TabControl: React.FC<TabControlProps> = ({
     setTimeout(() => setTurboToast(null), 3500);
   };
 
-  const handleSendBySelect = (isRose: boolean, roseComboCount = 1) => {
+  const handleSendBySelect = (
+    isRose: boolean,
+    roseComboCount = 1,
+    isSpecialGift = false,
+    giftCoinsOverride?: number
+  ) => {
     const prov = provinces.find((p) => p.id === selectedProvinceId);
     if (!prov) return;
     onTriggerRandomGift(
@@ -203,7 +223,9 @@ export const TabControl: React.FC<TabControlProps> = ({
       prov.id,
       testUsername.trim() || 'Người Chơi',
       false,
-      roseComboCount
+      roseComboCount,
+      isSpecialGift,
+      giftCoinsOverride
     );
   };
 
@@ -311,7 +333,7 @@ export const TabControl: React.FC<TabControlProps> = ({
             <span className="font-bold uppercase tracking-wider text-stone-300">
               Danh sách hàng chờ sự kiện âm thanh ({combinedQueueDisplay.length})
             </span>
-            <span>Hàng mới tự thêm vào cuối</span>
+            <span>Quà ưu tiên lên đầu</span>
           </div>
 
           <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
@@ -326,6 +348,8 @@ export const TabControl: React.FC<TabControlProps> = ({
                   className={`px-2.5 py-1.5 rounded-lg border flex items-center justify-between gap-2 text-[11px] ${
                     item.isTurbo
                       ? 'bg-amber-950/40 border-amber-500/50 text-amber-100'
+                      : item.isGift
+                      ? 'bg-gradient-to-r from-rose-950/70 to-amber-950/50 border-amber-400/70 text-amber-100'
                       : 'bg-stone-950 border-stone-800 text-stone-200'
                   }`}
                 >
@@ -336,6 +360,8 @@ export const TabControl: React.FC<TabControlProps> = ({
                     <span
                       className={`px-1.5 py-0.5 rounded text-[9.5px] font-extrabold shrink-0 ${
                         item.isTurbo
+                          ? 'bg-amber-400 text-stone-950'
+                          : item.isGift
                           ? 'bg-amber-400 text-stone-950'
                           : 'bg-stone-800 text-amber-300'
                       }`}
@@ -489,7 +515,7 @@ export const TabControl: React.FC<TabControlProps> = ({
                   }
                   className="accent-emerald-500 rounded cursor-pointer"
                 />
-                <span>Đọc xong tổng kết ➔ Chuyển sang phiên mới</span>
+                <span>Chỉ đọc xong tổng kết ➔ Chuyển sang phiên mới</span>
               </label>
 
               {onTriggerSessionEndNow && (
@@ -506,15 +532,15 @@ export const TabControl: React.FC<TabControlProps> = ({
         )}
       </section>
 
-      {/* 1. Test nhanh Đến Tỉnh (+1đ, 1 lần/phiên), Gửi Hoa Hồng (+5đ) & Combo Nhiều Hoa */}
+      {/* 1. Test nhanh Đến Tỉnh (+1đ, 1 lần/phiên), Gửi Hoa Hồng (+5đ) & Quà Đặc Biệt (>1 coin) */}
       <section className="p-3 rounded-xl bg-stone-900/90 border border-amber-500/40 space-y-2.5">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
             <Gift className="w-3.5 h-3.5" />
-            <span>2. Điều Khiển Đến Tỉnh & Gửi Hoa Hồng</span>
+            <span>2. Điều Khiển Đến Tỉnh, Hoa Hồng & Quà Đặc Biệt</span>
           </h2>
           <span className="text-[10px] font-mono text-emerald-300">
-            Comment: 1 lần/phiên • Hoa: Vô hạn
+            1 coin = Hoa • &gt;1 coin = Quà ĐB (×5đ)
           </span>
         </div>
 
@@ -562,26 +588,38 @@ export const TabControl: React.FC<TabControlProps> = ({
 
           <button
             type="button"
-            onClick={() => handleSendBySelect(true, 1)}
+            onClick={() => handleSendBySelect(true, 1, false, 1)}
             className="px-3 py-2 rounded-lg bg-rose-500 hover:bg-rose-400 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition whitespace-nowrap"
           >
             <Flower2 className="w-3.5 h-3.5" />
-            <span>Tặng 1 Hoa (+{config.rosePoints}đ)</span>
+            <span>Tặng Quà 1 Coin (+{config.rosePoints}đ)</span>
           </button>
         </div>
 
-        {/* Nút Test Gửi Nhiều Hoa Hồng (Đọc câu cảm ơn nhiệt tình) */}
-        <button
-          type="button"
-          onClick={() => handleSendBySelect(true, 5)}
-          className="w-full py-2 px-3 rounded-lg bg-gradient-to-r from-rose-600 to-amber-500 hover:from-rose-500 hover:to-amber-400 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition shadow"
-        >
-          <Flower2 className="w-3.5 h-3.5" />
-          <span>
-            🌹×5 Gửi Combo 5 Hoa Hồng (+{(config.rosePoints || 5) * 5}đ • Đọc
-            Cảm Ơn Nhiệt Tình)
-          </span>
-        </button>
+        {/* Nút Test Gửi Nhiều Hoa Hồng (Đọc câu cảm ơn nhiệt tình) & Quà Đặc Biệt (>1 coin) */}
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => handleSendBySelect(true, 5, false, 5)}
+            className="py-2 px-2.5 rounded-lg bg-gradient-to-r from-rose-600 to-amber-500 hover:from-rose-500 hover:to-amber-400 text-white font-extrabold text-[11px] flex items-center justify-center gap-1 cursor-pointer transition shadow"
+          >
+            <Flower2 className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">
+              🌹×5 Combo 5 Hoa (+{(config.rosePoints || 5) * 5}đ)
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSendBySelect(true, 1, true, 10)}
+            className="py-2 px-2.5 rounded-lg bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-500 hover:from-amber-300 hover:to-yellow-200 text-stone-950 font-black text-[11px] flex items-center justify-center gap-1 cursor-pointer transition shadow"
+          >
+            <Gift className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">
+              🎁 Quà Đặc Biệt 10 Coin (+{(config.rosePoints || 5) * 10}đ)
+            </span>
+          </button>
+        </div>
 
         {/* Nút Test Gom Nhiều Người Cùng Tặng Về 1 Tỉnh */}
         <button

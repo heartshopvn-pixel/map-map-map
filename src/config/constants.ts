@@ -70,7 +70,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.51,
     mapY: 0.215,
     labelSide: 'right',
-    aliases: ['hải phòng', 'hai phong', 'haiphong', 'hải dương', 'hai duong', 'hp', '15', '16', '34'],
+    aliases: ['hải phòng', 'hai phong', 'haiphong', 'hải dương', 'hai duong', 'haiduong', 'chí linh', 'hp', '15', '16', '34'],
   },
   {
     id: 'tp-hue',
@@ -80,7 +80,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.54,
     mapY: 0.455,
     labelSide: 'right',
-    aliases: ['huế', 'hue', 'thừa thiên huế', 'thua thien hue', 'tp huế', '75'],
+    aliases: ['huế', 'hue', 'thừa thiên huế', 'thua thien hue', 'thuathienhue', 'tp huế', '75'],
   },
   {
     id: 'tp-da-nang',
@@ -90,7 +90,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.585,
     mapY: 0.495,
     labelSide: 'right',
-    aliases: ['đà nẵng', 'da nang', 'danang', 'quảng nam', 'quang nam', '43', '92'],
+    aliases: ['đà nẵng', 'da nang', 'danang', 'quảng nam', 'quang nam', 'quangnam', 'hội an', 'hoi an', 'tam kỳ', '43', '92'],
   },
   {
     id: 'tp-ho-chi-minh',
@@ -103,6 +103,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     aliases: [
       'hồ chí minh',
       'ho chi minh',
+      'hochiminh',
       'sài gòn',
       'sai gon',
       'saigon',
@@ -111,10 +112,21 @@ export const INITIAL_PROVINCES_DATA: Omit<
       'sg',
       'bình dương',
       'binh duong',
+      'binhduong',
+      'thủ dầu một',
+      'dĩ an',
+      'thuận an',
+      'bà rịa - vũng tàu',
+      'bà rịa vũng tàu',
+      'ba ria vung tau',
+      'bariavungtau',
+      'brvt',
       'vũng tàu',
       'vung tau',
+      'vungtau',
       'bà rịa',
       'ba ria',
+      'baria',
       '50',
       '59',
       '61',
@@ -135,8 +147,11 @@ export const INITIAL_PROVINCES_DATA: Omit<
       'cantho',
       'sóc trăng',
       'soc trang',
+      'soctrang',
       'hậu giang',
       'hau giang',
+      'haugiang',
+      'vị thanh',
       '65',
       '83',
       '95',
@@ -182,7 +197,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.33,
     mapY: 0.125,
     labelSide: 'left',
-    aliases: ['lào cai', 'lao cai', 'laocai', 'yên bái', 'yen bai', 'sapa', '24', '21'],
+    aliases: ['lào cai', 'lao cai', 'laocai', 'yên bái', 'yen bai', 'yenbai', 'sapa', 'sa pa', '24', '21'],
   },
   {
     id: 'tuyen-quang',
@@ -192,7 +207,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.39,
     mapY: 0.11,
     labelSide: 'left',
-    aliases: ['tuyên quang', 'tuyen quang', 'hà giang', 'ha giang', '22', '23'],
+    aliases: ['tuyên quang', 'tuyen quang', 'tuyenquang', 'hà giang', 'ha giang', 'hagiang', '22', '23'],
   },
   {
     id: 'cao-bang',
@@ -222,7 +237,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.445,
     mapY: 0.155,
     labelSide: 'right',
-    aliases: ['thái nguyên', 'thai nguyen', 'bắc kạn', 'bac kan', '20', '97'],
+    aliases: ['thái nguyên', 'thai nguyen', 'thainguyen', 'bắc kạn', 'bac kan', 'backan', 'bắc cạn', 'bac can', 'baccan', '20', '97'],
   },
   {
     id: 'phu-tho',
@@ -235,10 +250,15 @@ export const INITIAL_PROVINCES_DATA: Omit<
     aliases: [
       'phú thọ',
       'phu tho',
+      'phutho',
+      'việt trì',
       'vĩnh phúc',
       'vinh phuc',
+      'vinhphuc',
+      'vĩnh yên',
       'hòa bình',
       'hoa binh',
+      'hoabinh',
       '19',
       '88',
       '28',
@@ -252,7 +272,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.565,
     mapY: 0.185,
     labelSide: 'right',
-    aliases: ['quảng ninh', 'quang ninh', 'hạ long', 'ha long', '14'],
+    aliases: ['quảng ninh', 'quang ninh', 'quangninh', 'hạ long', 'ha long', '14'],
   },
   {
     id: 'bac-ninh',
@@ -262,7 +282,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.475,
     mapY: 0.19,
     labelSide: 'right',
-    aliases: ['bắc ninh', 'bac ninh', 'bắc giang', 'bac giang', '99', '98'],
+    aliases: ['bắc ninh', 'bac ninh', 'bacninh', 'bắc giang', 'bac giang', 'bacgiang', '99', '98'],
   },
   {
     id: 'hung-yen',
@@ -272,7 +292,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.47,
     mapY: 0.23,
     labelSide: 'right',
-    aliases: ['hưng yên', 'hung yen', 'thái bình', 'thai binh', '89', '17'],
+    aliases: ['hưng yên', 'hung yen', 'hungyen', 'thái bình', 'thai binh', 'thaibinh', '89', '17'],
   },
   {
     id: 'ninh-binh',
@@ -285,10 +305,14 @@ export const INITIAL_PROVINCES_DATA: Omit<
     aliases: [
       'ninh bình',
       'ninh binh',
+      'ninhbinh',
       'nam định',
       'nam dinh',
+      'namdinh',
       'hà nam',
       'ha nam',
+      'hanam',
+      'phủ lý',
       '35',
       '18',
       '90',
@@ -332,7 +356,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.49,
     mapY: 0.425,
     labelSide: 'left',
-    aliases: ['quảng trị', 'quang tri', 'quảng bình', 'quang binh', '73', '74'],
+    aliases: ['quảng trị', 'quang tri', 'quangtri', 'đông hà', 'quảng bình', 'quang binh', 'quangbinh', 'đồng hới', '73', '74'],
   },
   {
     id: 'quang-ngai',
@@ -342,7 +366,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.60,
     mapY: 0.545,
     labelSide: 'right',
-    aliases: ['quảng ngãi', 'quang ngai', 'kon tum', 'kontum', '76', '82'],
+    aliases: ['quảng ngãi', 'quang ngai', 'quangngai', 'kon tum', 'kontum', '76', '82'],
   },
   {
     id: 'gia-lai',
@@ -352,7 +376,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.605,
     mapY: 0.60,
     labelSide: 'right',
-    aliases: ['gia lai', 'gialai', 'pleiku', 'bình định', 'binh dinh', 'quy nhơn', '81', '77'],
+    aliases: ['gia lai', 'gialai', 'pleiku', 'bình định', 'binh dinh', 'binhdinh', 'quy nhơn', 'quynhon', '81', '77'],
   },
   {
     id: 'dak-lak',
@@ -362,7 +386,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.615,
     mapY: 0.66,
     labelSide: 'right',
-    aliases: ['đắk lắk', 'dak lak', 'đăk lăk', 'buôn ma thuột', 'phú yên', 'phu yen', '47', '78'],
+    aliases: ['đắk lắk', 'dak lak', 'daklak', 'đăk lăk', 'đắc lắc', 'dac lac', 'daclac', 'buôn ma thuột', 'bmt', 'phú yên', 'phu yen', 'phuyen', 'tuy hòa', '47', '78'],
   },
   {
     id: 'khanh-hoa',
@@ -372,7 +396,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.645,
     mapY: 0.715,
     labelSide: 'right',
-    aliases: ['khánh hòa', 'khanh hoa', 'nha trang', 'ninh thuận', 'ninh thuan', '79', '85'],
+    aliases: ['khánh hòa', 'khanh hoa', 'khanhhoa', 'nha trang', 'nhatrang', 'ninh thuận', 'ninh thuan', 'ninhthuan', 'phan rang', '79', '85'],
   },
   {
     id: 'lam-dong',
@@ -385,13 +409,22 @@ export const INITIAL_PROVINCES_DATA: Omit<
     aliases: [
       'lâm đồng',
       'lam dong',
+      'lamdong',
       'đà lạt',
       'da lat',
+      'dalat',
       'đắk nông',
       'dak nong',
+      'daknong',
+      'đắc nông',
+      'dac nong',
+      'dacnong',
+      'gia nghĩa',
       'bình thuận',
       'binh thuan',
+      'binhthuan',
       'phan thiết',
+      'phanthiet',
       '49',
       '48',
       '86',
@@ -405,7 +438,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.46,
     mapY: 0.765,
     labelSide: 'left',
-    aliases: ['tây ninh', 'tay ninh', 'long an', 'longan', '70', '62'],
+    aliases: ['tây ninh', 'tay ninh', 'tayninh', 'long an', 'longan', 'tân an', '70', '62'],
   },
   {
     id: 'dong-nai',
@@ -415,7 +448,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.53,
     mapY: 0.745,
     labelSide: 'left',
-    aliases: ['đồng nai', 'dong nai', 'biên hòa', 'bình phước', 'binh phuoc', '60', '93'],
+    aliases: ['đồng nai', 'dong nai', 'dongnai', 'biên hòa', 'bien hoa', 'bình phước', 'binh phuoc', 'binhphuoc', 'đồng xoài', '60', '93'],
   },
   {
     id: 'dong-thap',
@@ -425,7 +458,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.435,
     mapY: 0.81,
     labelSide: 'left',
-    aliases: ['đồng tháp', 'dong thap', 'tiền giang', 'tien giang', 'mỹ tho', '66', '63'],
+    aliases: ['đồng tháp', 'dong thap', 'dongthap', 'cao lãnh', 'sa đéc', 'tiền giang', 'tien giang', 'tiengiang', 'mỹ tho', 'mytho', '66', '63'],
   },
   {
     id: 'vinh-long',
@@ -438,10 +471,13 @@ export const INITIAL_PROVINCES_DATA: Omit<
     aliases: [
       'vĩnh long',
       'vinh long',
+      'vinhlong',
       'bến tre',
       'ben tre',
+      'bentre',
       'trà vinh',
       'tra vinh',
+      'travinh',
       '64',
       '71',
       '84',
@@ -455,7 +491,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.375,
     mapY: 0.835,
     labelSide: 'left',
-    aliases: ['an giang', 'angiang', 'kiên giang', 'kien giang', 'phú quốc', '67', '68'],
+    aliases: ['an giang', 'angiang', 'long xuyên', 'châu đốc', 'kiên giang', 'kien giang', 'kiengiang', 'rạch giá', 'hà tiên', 'phú quốc', 'phu quoc', 'phuquoc', '67', '68'],
   },
   {
     id: 'ca-mau',
@@ -465,7 +501,7 @@ export const INITIAL_PROVINCES_DATA: Omit<
     mapX: 0.385,
     mapY: 0.905,
     labelSide: 'left',
-    aliases: ['cà mau', 'ca mau', 'camau', 'bạc liêu', 'bac lieu', '69', '94'],
+    aliases: ['cà mau', 'ca mau', 'camau', 'bạc liêu', 'bac lieu', 'baclieu', '69', '94'],
   },
 ];
 
@@ -529,12 +565,18 @@ export function matchProvinceFromComment(
     }
   }
 
-  // 3. Khớp chuỗi con nếu người chơi viết liền (VD: "hanoi", "danang", "tphcm", "camau")
-  const squashed = removeAccents(lower).replace(/\s+/g, '');
+  // 3. Khớp chuỗi con nếu người chơi viết liền (VD: "hanoi", "danang", "tphcm", "camau", "binhduong", "haiduong", "bacgiang")
+  const squashed = removeAccents(lower).replace(/[^a-z0-9]/g, '');
   for (const prov of provinces) {
-    const nameSquashed = removeAccents(prov.name.replace(/^TP\.\s*/i, '')).replace(/\s+/g, '');
+    const nameSquashed = removeAccents(prov.name.replace(/^TP\.\s*/i, '')).replace(/[^a-z0-9]/g, '');
     if (nameSquashed.length >= 4 && squashed.includes(nameSquashed)) {
       return prov;
+    }
+    for (const alias of prov.aliases) {
+      const aliasSquashed = removeAccents(alias).replace(/[^a-z0-9]/g, '');
+      if (aliasSquashed.length >= 5 && squashed.includes(aliasSquashed)) {
+        return prov;
+      }
     }
   }
 
@@ -606,6 +648,7 @@ export const DEFAULT_LAYOUT_POSITIONS = {
   visitingBar: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
   giftGuideIcons: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
   howToPlayBoard: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
+  eventQueueBoard: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
   sessionTimerCard: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
   sessionBarChartCard: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
   bigAvatarZone: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
@@ -618,6 +661,7 @@ export const DEFAULT_LAYOUT_VISIBILITY = {
   visitingBar: true,
   giftGuideIcons: true,
   howToPlayBoard: true,
+  eventQueueBoard: true,
   sessionTimerCard: true,
   sessionBarChartCard: true,
   bigAvatarZone: true,
@@ -694,6 +738,8 @@ export const DEFAULT_CONFIG: GameConfig = {
   maxTtsQueueSize: 40,
   commentGiftTtsTemplate: 'Bạn [Tên] đã đến tỉnh [Tỉnh] và gửi [Điểm] điểm',
   roseGiftTtsTemplate: '[Tên] đã gửi hoa hồng kèm [Điểm] điểm về [Tỉnh]',
+  specialGiftTtsTemplate:
+    '[Tên] là tặng 1 món quà đặc biệt kèm [Điểm] điểm về [Tỉnh]',
   multiRoseGiftTtsTemplate:
     'Wow! Cảm ơn [Tên] rất nhiều đã gửi [SốHoa] bông hoa hồng kèm [Điểm] điểm siêu khủng về tỉnh [Tỉnh]! Yêu [Tên] quá trời luôn!',
   batchGiftTtsTemplate:
@@ -794,7 +840,37 @@ app.use((req, res, next) => {
   next();
 });
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
+
+let cachedBgmStatePayload = null;
+let cachedBgmUpdatedAt = 0;
+
+app.get('/bgm-state', (req, res) => {
+  res.json({
+    ok: true,
+    payload: cachedBgmStatePayload,
+    updatedAt: cachedBgmUpdatedAt
+  });
+});
+
+app.post('/bgm-state', (req, res) => {
+  const payload = req.body?.payload || req.body;
+  if (!payload || typeof payload !== 'object') {
+    return res.status(400).json({ ok: false });
+  }
+  cachedBgmStatePayload = payload;
+  cachedBgmUpdatedAt = Date.now();
+  const packet = {
+    type: 'ADMIN_SYNC',
+    action: 'SYNC_BGM_STATE',
+    payload,
+    timestamp: cachedBgmUpdatedAt
+  };
+  latestSyncCache['SYNC_BGM_STATE'] = packet;
+  broadcast(packet);
+  res.json({ ok: true });
+});
 
 const ttsCache = new Map();
 const MAX_TTS_CACHE = 180;
@@ -855,6 +931,9 @@ app.get('/tts', async (req, res) => {
     const readable = tts.toStream(text);
     const chunks = [];
     readable.on('data', chunk => chunks.push(Buffer.from(chunk)));
+    readable.on('error', () => {
+      try { res.end(); } catch (e) {}
+    });
     readable.on('end', () => {
       const fullBuf = Buffer.concat(chunks);
       if (fullBuf.length > 128) {
@@ -1187,6 +1266,7 @@ async function connectTikTok(customUser) {
           username,
           avatarUrl: getUserAvatar(data),
           giftName,
+          diamondCount,
           coins,
           repeatCount,
           repeatEnd: true

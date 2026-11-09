@@ -123,6 +123,51 @@ async function startServer() {
     res.json({ ok: true, deliveredTo: Math.max(0, clients.size - 1) });
   });
 
+  // Direct HTTP BGM State cache for TikTok Live Studio / OBS Browser Source (?view=live / ?obs=1)
+  app.use('/api/bgm-state', (req: Request, res: Response, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
+  app.get('/api/bgm-state', (_req: Request, res: Response) => {
+    const packet = latestSyncPackets['SYNC_BGM_STATE'];
+    res.json({
+      ok: true,
+      payload: packet?.payload || null,
+      updatedAt: packet?.timestamp || 0,
+    });
+  });
+
+  app.post('/api/bgm-state', (req: Request, res: Response) => {
+    const payload = req.body?.payload || req.body;
+    if (!payload || typeof payload !== 'object') {
+      res.status(400).json({ ok: false });
+      return;
+    }
+    const packet = {
+      type: 'ADMIN_SYNC',
+      action: 'SYNC_BGM_STATE',
+      payload,
+      timestamp: Date.now(),
+    };
+    latestSyncPackets['SYNC_BGM_STATE'] = packet;
+    const payloadStr = `data: ${JSON.stringify(packet)}\n\n`;
+    clients.forEach((c) => {
+      try {
+        c.res.write(payloadStr);
+      } catch {
+        // Ignore
+      }
+    });
+    res.json({ ok: true });
+  });
+
   // CORS middleware for local Node server.js -> Cloud Webhook relay
   app.use('/api/tiktok-webhook', (req: Request, res: Response, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -383,6 +428,7 @@ async function startServer() {
             username,
             avatarUrl,
             giftName,
+            diamondCount,
             coins,
             repeatCount,
             repeatEnd: true,

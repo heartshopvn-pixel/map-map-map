@@ -21,8 +21,11 @@ export interface TTSQueueItemMeta {
   provinceName?: string;
   username?: string;
   usernamesList?: string[];
+  shortLabel?: string;
   reason?: CameraFocusReason;
   isRose?: boolean;
+  isSpecialGift?: boolean;
+  giftCoins?: number;
   isNpc?: boolean;
   pointsAdded?: number;
   totalRoses?: number;
@@ -34,6 +37,7 @@ export interface TTSQueueItem {
   isPriority: boolean;
   addedAt: number;
   isTurboBatch?: boolean;
+  isSessionSummary?: boolean;
   meta?: TTSQueueItemMeta;
   onStart?: () => void;
   onDone?: () => void;
@@ -179,6 +183,7 @@ class SoundService {
   private ttsQueue: TTSQueueItem[] = [];
   private activeEventItem: TTSQueueItem | null = null;
   private isSpeaking = false;
+  private speakingStartedAt = 0;
   private currentEventText = '';
   private currentAudio: HTMLAudioElement | null = null;
   private speechTokenSeq = 0;
@@ -200,6 +205,7 @@ class SoundService {
   private bgmNeedsUnlock = false;
   private isApplyingRemoteBgm = false;
   private bgmSyncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private bgmBlobUrlCache = new Map<string, string>();
 
   private audioBlobCache = new Map<string, string>();
   private audioBlobMetaCache = new Map<
@@ -262,18 +268,7 @@ class SoundService {
           if (this.ctx && this.ctx.state === 'suspended') {
             void this.ctx.resume();
           }
-          if (this.isBgmPlaying && this.bgmAudio && this.bgmAudio.paused) {
-            this.bgmAudio.volume = this.localTabMuted
-              ? 0
-              : Math.max(0, Math.min(1, this.bgmVolume));
-            this.bgmAudio
-              .play()
-              .then(() => {
-                this.bgmNeedsUnlock = false;
-                this.emitBgmState();
-              })
-              .catch(() => {});
-          }
+          this.tryResumePendingBgm();
         } catch {
           // Ignore
         }
@@ -282,6 +277,84 @@ class SoundService {
       window.addEventListener('touchstart', unlockAudio, { passive: true });
       window.addEventListener('click', unlockAudio, { passive: true });
       window.addEventListener('keydown', unlockAudio, { passive: true });
+
+      // Tự động kéo trạng thái Nhạc Nền (BGM) qua HTTP cho link TikTok Studio (?view=live / ?obs=1)
+      const pullRemoteBgmState = async () => {
+        const endpoints = ['/api/bgm-state', 'http://127.0.0.1:8080/bgm-state', 'http://localhost:8080/bgm-state'];
+        for (const url of endpoints) {
+          try {
+            const res = await fetch(url, { cache: 'no-store' });
+            if (!res.ok) continue;
+            const data = await res.json();
+            if (data?.ok && data?.payload && Array.isArray(data.payload.tracks) && data.payload.tracks.length > 0) {
+              if (this.bgmTracks.length === 0 || (data.payload.isPlaying && (!this.bgmAudio || this.bgmAudio.paused))) {
+                this.applyRemoteBgmSnapshot(data.payload);
+              }
+              return;
+            }
+          } catch {
+            // Ignore
+          }
+        }
+      };
+
+      setTimeout(() => void pullRemoteBgmState(), 450);
+      setTimeout(() => void pullRemoteBgmState(), 2200);
+      setInterval(() => {
+        if (this.bgmTracks.length === 0 || (this.isBgmPlaying && (!this.bgmAudio || this.bgmAudio.paused))) {
+          void pullRemoteBgmState();
+        }
+      }, 6000);
+    }
+  }
+
+  private resolvePlayableBgmUrl(trackId: string, rawUrl: string): string {
+    if (!rawUrl || !rawUrl.startsWith('data:')) {
+      return rawUrl;
+    }
+    const cached = this.bgmBlobUrlCache.get(trackId);
+    if (cached) return cached;
+    try {
+      const commaIdx = rawUrl.indexOf(',');
+      if (commaIdx === -1) return rawUrl;
+      const header = rawUrl.slice(0, commaIdx);
+      const base64 = rawUrl.slice(commaIdx + 1);
+      const mimeMatch = header.match(/data:([^;]+)/i);
+      const mimeType = mimeMatch && mimeMatch[1] ? mimeMatch[1] : 'audio/mpeg';
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: mimeType });
+      const blobUrl = URL.createObjectURL(blob);
+      this.bgmBlobUrlCache.set(trackId, blobUrl);
+      return blobUrl;
+    } catch {
+      return rawUrl;
+    }
+  }
+
+  private tryResumePendingBgm() {
+    if (!this.isBgmPlaying || this.bgmTracks.length === 0) return;
+    if (this.bgmAudio && !this.bgmAudio.paused) return;
+    try {
+      if (this.bgmAudio && this.bgmAudio.src) {
+        this.bgmAudio.volume = this.localTabMuted
+          ? 0
+          : Math.max(0, Math.min(1, this.bgmVolume));
+        this.bgmAudio
+          .play()
+          .then(() => {
+            this.bgmNeedsUnlock = false;
+            this.emitBgmState();
+          })
+          .catch(() => {});
+      } else {
+        this.playBgmTrackAt(this.currentBgmIndex, false);
+      }
+    } catch {
+      // Ignore
     }
   }
 
@@ -359,6 +432,21 @@ class SoundService {
     };
   }
 
+  private pushBgmStateOverHttp(payload: Record<string, any>) {
+    if (typeof window === 'undefined') return;
+    const body = JSON.stringify({ payload });
+    fetch('/api/bgm-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    }).catch(() => {});
+    fetch('http://127.0.0.1:8080/bgm-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    }).catch(() => {});
+  }
+
   public broadcastBgmSync(immediate = true) {
     if (this.isApplyingRemoteBgm) return;
     if (this.bgmSyncDebounceTimer) {
@@ -366,11 +454,15 @@ class SoundService {
       this.bgmSyncDebounceTimer = null;
     }
     if (immediate) {
-      syncService.sendCommand('SYNC_BGM_STATE', this.getBgmSyncPayload());
+      const payload = this.getBgmSyncPayload();
+      syncService.sendCommand('SYNC_BGM_STATE', payload);
+      this.pushBgmStateOverHttp(payload);
     } else {
       this.bgmSyncDebounceTimer = setTimeout(() => {
         this.bgmSyncDebounceTimer = null;
-        syncService.sendCommand('SYNC_BGM_STATE', this.getBgmSyncPayload());
+        const payload = this.getBgmSyncPayload();
+        syncService.sendCommand('SYNC_BGM_STATE', payload);
+        this.pushBgmStateOverHttp(payload);
       }, 120);
     }
   }
@@ -539,6 +631,15 @@ class SoundService {
     const idx = this.bgmTracks.findIndex((t) => t.id === id);
     if (idx === -1) return;
     const removed = this.bgmTracks[idx];
+    const cachedBlob = this.bgmBlobUrlCache.get(removed.id);
+    if (cachedBlob) {
+      try {
+        URL.revokeObjectURL(cachedBlob);
+      } catch {
+        // Ignore
+      }
+      this.bgmBlobUrlCache.delete(removed.id);
+    }
     if (removed.url.startsWith('blob:')) {
       try {
         URL.revokeObjectURL(removed.url);
@@ -578,6 +679,14 @@ class SoundService {
   }
 
   public clearAllBgmTracks() {
+    this.bgmBlobUrlCache.forEach((blobUrl) => {
+      try {
+        URL.revokeObjectURL(blobUrl);
+      } catch {
+        // Ignore
+      }
+    });
+    this.bgmBlobUrlCache.clear();
     for (const t of this.bgmTracks) {
       if (t.url.startsWith('blob:')) {
         try {
@@ -640,7 +749,8 @@ class SoundService {
       }
     }
 
-    const audio = new Audio(track.url);
+    const playableUrl = this.resolvePlayableBgmUrl(track.id, track.url);
+    const audio = new Audio(playableUrl);
     audio.preload = 'auto';
     audio.volume = this.localTabMuted
       ? 0
@@ -783,6 +893,7 @@ class SoundService {
     if (this.ctx.state === 'suspended') {
       void this.ctx.resume();
     }
+    this.tryResumePendingBgm();
   }
 
   public isRemoteSlaveMode(): boolean {
@@ -824,7 +935,7 @@ class SoundService {
   }
 
   public isTabMuted(): boolean {
-    return this.localTabMuted || this.remoteSlaveMode;
+    return this.localTabMuted;
   }
 
   public setTabMuted(muted: boolean) {
@@ -934,6 +1045,13 @@ class SoundService {
     return this.isSpeaking || this.ttsQueue.length > 0;
   }
 
+  public getActiveSpokenProvinceId(): string | null {
+    if (this.isSpeaking && this.activeEventItem?.meta?.provinceId) {
+      return this.activeEventItem.meta.provinceId;
+    }
+    return null;
+  }
+
   public isSessionSummarySpeakingOrQueued(): boolean {
     if (
       this.isSpeaking &&
@@ -1000,19 +1118,23 @@ class SoundService {
             provinceId: step.provinceId,
             provinceName: step.provinceName,
             username: step.username,
+            shortLabel: step.username || '⚡ Siêu tốc',
             pointsAdded: step.pointsAdded,
             isRose: step.isRose,
           }
-        : undefined,
+        : {
+            shortLabel: '⚡ Siêu tốc',
+          },
       onStart: step.onStart,
       onDone: step.onDone,
     }));
 
-    // Chèn ngay sau các mục turbo đang dở (nếu có), nhưng đứng trước các hàng chờ mới phát sinh
+    // Chèn ngay sau các mục tổng kết phiên hoặc turbo đang dở (nếu có), nhưng đứng trước các hàng chờ thường
     let insertIdx = 0;
     while (
       insertIdx < this.ttsQueue.length &&
-      this.ttsQueue[insertIdx].isTurboBatch
+      (this.ttsQueue[insertIdx].isSessionSummary ||
+        this.ttsQueue[insertIdx].isTurboBatch)
     ) {
       insertIdx++;
     }
@@ -1245,6 +1367,10 @@ class SoundService {
       text: clean,
       isPriority: false,
       addedAt: now,
+      meta: {
+        shortLabel: '👋 Chào khách',
+        username: cleanUser,
+      },
     });
     this.emitEventQueue();
     this.processQueue(config);
@@ -1292,6 +1418,9 @@ class SoundService {
       text: clean,
       isPriority: true,
       addedAt: Date.now(),
+      meta: {
+        shortLabel: '🔔 Vòng mới',
+      },
       onDone,
     });
     this.emitEventQueue();
@@ -1300,9 +1429,9 @@ class SoundService {
 
   /**
    * Đọc thông báo Tổng kết Top 3 tỉnh dẫn đầu phiên:
-   * - Nếu người đọc đang đọc dở câu sự kiện cuối cùng của phiên thì đợi đọc nốt câu đó xong rồi đọc tiếp ngay phần tổng kết (không cắt ngang giọng đọc).
-   * - Đọc lần lượt đầy đủ tất cả các câu trong bản tổng kết (Hạng 1, Hạng 2, Hạng 3 kèm tên người tặng điểm nhiều nhất).
-   * - Chỉ khi người đọc ĐỌC XONG HẾT toàn bộ câu cuối cùng của bản tổng kết mới gọi `onDone()` để chuyển sang phiên game mới!
+   * - Xóa toàn bộ hàng chờ 1 điểm / câu nói vu vơ / chào khách, CHỈ GIỮ LẠI hàng chờ tặng quà (isRose = true).
+   * - Ngắt câu thường đang đọc dở để đọc ngay bản tổng kết kết quả phiên.
+   * - Chỉ đọc hết đúng nội dung báo kết quả phiên là gọi `onDone()` chuyển sang vòng mới ngay lập tức (không bị kẹt bởi các sự kiện mới phát sinh liên tục)!
    */
   public announceSessionResultNow(
     summaryInput: string | string[],
@@ -1310,17 +1439,16 @@ class SoundService {
     onDone?: () => void
   ) {
     this.latestConfig = config;
-    // Khi kết thúc phiên chơi: XÓA tất cả hàng chờ 1 điểm (comment trong hàng chờ), GIỮ LẠI hàng chờ tặng quà (isRose = true)
-    // đồng thời không ngắt câu đang phát dở để người đọc đọc trọn vẹn câu hiện tại rồi đọc luôn tổng kết.
     const savedGiftItems = this.ttsQueue.filter((q) => Boolean(q.meta?.isRose));
     this.ttsQueue = [];
+    this.stopCurrentUtteranceOnly();
     this.playSessionEndFanfareSfx(config.sfxVolume);
 
     if (!config.ttsEnabled) {
       this.ttsQueue = savedGiftItems;
       this.emitEventQueue();
       if (onDone) {
-        setTimeout(onDone, 3000);
+        setTimeout(onDone, 2200);
       }
       return;
     }
@@ -1339,7 +1467,7 @@ class SoundService {
       this.ttsQueue = savedGiftItems;
       this.emitEventQueue();
       if (onDone) {
-        setTimeout(onDone, 2000);
+        setTimeout(onDone, 1800);
       }
       return;
     }
@@ -1351,7 +1479,11 @@ class SoundService {
         id: `session_end_${now}_${idx}`,
         text: sentence,
         isPriority: true,
+        isSessionSummary: true,
         addedAt: now + idx,
+        meta: {
+          shortLabel: '🏆 Tổng kết',
+        },
         onDone: isLast ? onDone : undefined,
       });
     });
@@ -1489,21 +1621,27 @@ class SoundService {
     config: GameConfig,
     includeRandomPhrase = true,
     isNpc = false,
-    roseCount = 1
+    roseCount = 1,
+    isSpecialGift = false
   ): string {
     const cleanProvince = provinceName.replace(/^TP\.\s*/i, '').trim();
     const cleanUsername = username.replace(/^NPC\s+/i, '').trim();
     const effectiveRoses = isRose ? Math.max(1, Number(roseCount) || 1) : 0;
     // Chỉ coi là NPC khi gửi gói Hoa hồng / Quà coin (> 1 điểm). Nếu hỗ trợ 1 điểm thì coi như người bình thường!
     const isNpcGiftSupport = Boolean(isNpc && isRose);
-    // Chỉ đọc mẫu câu nhiều hoa khi số lượng hoa thực tế >= 2 bông (tuyệt đối không tự suy diễn từ điểm số để tránh gửi 1 bông mà đọc 2)
-    const isMultiRose = !isNpcGiftSupport && isRose && effectiveRoses >= 2;
+    // Chỉ đọc mẫu câu nhiều hoa khi là quà 1 coin (!isSpecialGift) và số lượng hoa thực tế >= 2 bông
+    const isMultiRose =
+      !isNpcGiftSupport && !isSpecialGift && isRose && effectiveRoses >= 2;
 
     let rawTpl = '';
     if (isNpcGiftSupport) {
       rawTpl =
         config.npcSupportTtsTemplate ||
         'NPC [Tên] đã hỗ trợ [Điểm] điểm về tỉnh [Tỉnh]';
+    } else if (isSpecialGift) {
+      rawTpl =
+        config.specialGiftTtsTemplate ||
+        '[Tên] là tặng 1 món quà đặc biệt kèm [Điểm] điểm về [Tỉnh]';
     } else if (isMultiRose) {
       rawTpl =
         config.multiRoseGiftTtsTemplate ||
@@ -1518,7 +1656,7 @@ class SoundService {
         'Bạn [Tên] đã đến tỉnh [Tỉnh] và gửi [Điểm] điểm';
     }
 
-    let formatted = rawTpl
+    const formatted = rawTpl
       .replace(/\[Tên\]|\[tên\]|\{name\}/gi, cleanUsername)
       .replace(
         /\[SốHoa\]|\[sốhoa\]|\[TổngHoa\]|\[Hoa\]|\{roses\}/gi,
@@ -1529,25 +1667,6 @@ class SoundService {
       .replace(/\s+/g, ' ')
       .trim();
 
-    // Chào vào phòng / câu chào ngẫu nhiên chỉ áp dụng cho người thật, không áp dụng cho NPC
-    if (includeRandomPhrase && !isNpc) {
-      const rosePrompt = !isMultiRose
-        ? this.pickRosePromptSuffix(cleanUsername, cleanProvince, config)
-        : '';
-      if (rosePrompt) {
-        formatted = `${formatted}. ${rosePrompt}`;
-      } else {
-        const suffix = this.pickRandomGreetingSuffix(
-          cleanUsername,
-          cleanProvince,
-          config
-        );
-        if (suffix) {
-          formatted = `${formatted}. ${suffix}`;
-        }
-      }
-    }
-
     return sanitizeAndLimitSpeechText(
       formatted,
       Math.max(65, config.maxTtsWords || 65)
@@ -1555,10 +1674,65 @@ class SoundService {
   }
 
   /**
-   * Tạo câu đọc gộp TẤT CẢ những người cùng vào 1 tỉnh trong hàng chờ để giải phóng nhanh hàng chờ:
-   * - Nếu có NPC gửi hoa hồng / quà coin (isNpc && totalRoses > 0): "NPC A, B đã hỗ trợ N điểm về tỉnh X" (không nói tặng quà)
-   * - Nếu chỉ hỗ trợ 1 điểm (totalRoses === 0): Coi như người bình thường, không đọc từ NPC ("Các bạn A, B, C đã đến tỉnh X và gửi N điểm")
-   * - Nếu người thật gửi nhiều hoa hồng: Cảm ơn nhiệt tình danh sách người chơi kèm tổng số hoa & điểm
+   * Tự động chèn sự kiện âm thanh phụ (Khích lệ tặng hoa hồng hoặc Nói vu vơ) thành mục riêng trong hàng chờ
+   * để hiển thị gọn gàng trên Bảng Hàng Chờ Event và không làm kẹt câu đọc chính của người chơi.
+   */
+  public maybeEnqueueFollowUpChatter(
+    username: string,
+    provinceName: string,
+    config: GameConfig,
+    skipRosePrompt = false
+  ) {
+    if (!config.ttsEnabled) return;
+    if (this.ttsQueue.length >= 4) return;
+    const cleanProvince = provinceName.replace(/^TP\.\s*/i, '').trim();
+    const cleanUsername = username.replace(/^NPC\s+/i, '').trim();
+    const now = Date.now();
+
+    const rosePrompt = !skipRosePrompt
+      ? this.pickRosePromptSuffix(cleanUsername, cleanProvince, config)
+      : '';
+    if (rosePrompt) {
+      const clean = sanitizeAndLimitSpeechText(rosePrompt, 50);
+      if (clean) {
+        this.ttsQueue.push({
+          id: `rose_prompt_${now}_${Math.random().toString(36).slice(2, 6)}`,
+          text: clean,
+          isPriority: false,
+          addedAt: now,
+          meta: {
+            shortLabel: '🌹 Khích lệ hoa',
+          },
+        });
+        this.emitEventQueue();
+        return;
+      }
+    }
+
+    const randomGreeting = this.pickRandomGreetingSuffix(
+      cleanUsername,
+      cleanProvince,
+      config
+    );
+    if (randomGreeting) {
+      const clean = sanitizeAndLimitSpeechText(randomGreeting, 50);
+      if (clean) {
+        this.ttsQueue.push({
+          id: `random_phrase_${now}_${Math.random().toString(36).slice(2, 6)}`,
+          text: clean,
+          isPriority: false,
+          addedAt: now,
+          meta: {
+            shortLabel: '💬 Nói vu vơ',
+          },
+        });
+        this.emitEventQueue();
+      }
+    }
+  }
+
+  /**
+   * Tạo câu đọc gộp TẤT CẢ những người cùng vào 1 tỉnh trong hàng chờ để giải phóng nhanh hàng chờ
    */
   public formatBatchedProvinceGiftSpeech(
     usernames: string[],
@@ -1582,7 +1756,8 @@ class SoundService {
         config,
         includeRandomPhrase,
         isNpcGiftSupport,
-        Math.max(1, totalRoses)
+        Math.max(1, totalRoses),
+        false
       );
     }
 
@@ -1613,26 +1788,6 @@ class SoundService {
         .trim();
     }
 
-    // Chào vào phòng / câu chào ngẫu nhiên chỉ áp dụng cho người thật, không áp dụng cho NPC
-    if (includeRandomPhrase && !isNpc) {
-      const rosePrompt =
-        totalRoses === 0
-          ? this.pickRosePromptSuffix(namesJoined, cleanProvince, config)
-          : '';
-      if (rosePrompt) {
-        formatted = `${formatted}. ${rosePrompt}`;
-      } else {
-        const suffix = this.pickRandomGreetingSuffix(
-          namesJoined,
-          cleanProvince,
-          config
-        );
-        if (suffix) {
-          formatted = `${formatted}. ${suffix}`;
-        }
-      }
-    }
-
     return sanitizeAndLimitSpeechText(
       formatted,
       Math.max(75, config.maxTtsWords || 75)
@@ -1640,16 +1795,39 @@ class SoundService {
   }
 
   /**
-   * Đưa câu đọc vào hàng chờ, tự động gom gộp TẤT CẢ người vào cùng tỉnh đang chờ trong hàng đợi
+   * Đưa câu đọc vào hàng chờ:
+   * - Giọng đọc là chuẩn duy nhất: mỗi mục có thể gắn `onStart` (cộng điểm + zoom camera vào tỉnh + ném avatar) và `onDone`.
+   * - Quà tặng / Hoa hồng / Quà đặc biệt (`isRose = true`) luôn được đẩy thẳng lên đầu hàng chờ (ngay sau mục tổng kết phiên nếu có) và không bị gộp làm sai số lượng.
    */
   public enqueueTTS(
     text: string,
     isPriority: boolean,
     config: GameConfig,
-    meta?: TTSQueueItemMeta
+    meta?: TTSQueueItemMeta,
+    onStart?: () => void,
+    onDone?: () => void
   ): boolean {
     this.latestConfig = config;
-    if (!config.ttsEnabled) return false;
+    if (!config.ttsEnabled) {
+      if (onStart) {
+        try {
+          onStart();
+        } catch {
+          // Ignore
+        }
+      }
+      if (onDone) {
+        setTimeout(() => {
+          try {
+            onDone();
+          } catch {
+            // Ignore
+          }
+        }, 1800);
+      }
+      return false;
+    }
+
     const cleanText = sanitizeAndLimitSpeechText(
       text,
       Math.max(75, config.maxTtsWords || 75)
@@ -1657,15 +1835,18 @@ class SoundService {
     if (!cleanText) return false;
 
     const now = Date.now();
-    const isGiftOrPriority = Boolean(isPriority || meta?.isRose);
+    const isGiftOrPriority = Boolean(
+      isPriority || meta?.isRose || meta?.isSpecialGift
+    );
 
     // Chỉ gom gộp các lượt bình luận 1 điểm (!isRose, !isNpc) của người chơi thật vào cùng tỉnh.
-    // TUYỆT ĐỐI KHÔNG tự ý cộng dồn các mục tặng hoa hồng / quà (isRose) trong ttsQueue để đọc chính xác số lượng hoa tặng của từng lượt!
+    // TUYỆT ĐỐI KHÔNG tự ý cộng dồn các mục tặng hoa hồng / quà (isRose) trong ttsQueue!
     if (
       meta?.provinceId &&
       meta?.provinceName &&
       !meta.isNpc &&
-      !meta.isRose
+      !meta.isRose &&
+      !meta.isSpecialGift
     ) {
       const incomingNames =
         meta.usernamesList && meta.usernamesList.length > 0
@@ -1677,8 +1858,10 @@ class SoundService {
       const existingIdx = this.ttsQueue.findIndex(
         (q) =>
           !q.isTurboBatch &&
+          !q.isSessionSummary &&
           !q.meta?.isNpc &&
           !q.meta?.isRose &&
+          !q.meta?.isSpecialGift &&
           q.meta?.provinceId === meta.provinceId
       );
 
@@ -1697,20 +1880,42 @@ class SoundService {
           nextPoints,
           0,
           config,
-          true,
+          false,
           false
         );
+
+        const prevOnStart = existing.onStart;
+        const combinedOnStart =
+          prevOnStart && onStart
+            ? () => {
+                prevOnStart();
+                onStart();
+              }
+            : onStart || prevOnStart;
+
+        const prevOnDone = existing.onDone;
+        const combinedOnDone =
+          prevOnDone && onDone
+            ? () => {
+                prevOnDone();
+                onDone();
+              }
+            : onDone || prevOnDone;
 
         this.ttsQueue[existingIdx] = {
           ...existing,
           text: mergedText,
           isPriority: false,
+          onStart: combinedOnStart,
+          onDone: combinedOnDone,
           meta: {
             ...existing.meta,
             username: nextNames.join(', '),
             usernamesList: nextNames,
+            shortLabel: nextNames.join(', '),
             pointsAdded: nextPoints,
             isRose: false,
+            isSpecialGift: false,
             isNpc: false,
             totalRoses: 0,
           },
@@ -1721,21 +1926,32 @@ class SoundService {
       }
     }
 
+    const defaultShortLabel = meta?.shortLabel
+      ? meta.shortLabel
+      : meta?.username
+      ? meta.username
+      : '🔊 Âm thanh';
+
     const queueItem: TTSQueueItem = {
       id: `tts_${now}_${Math.random().toString(36).slice(2, 7)}`,
       text: cleanText,
       isPriority: isGiftOrPriority,
       addedAt: now,
+      onStart,
+      onDone,
       meta: meta
         ? {
             ...meta,
+            shortLabel: defaultShortLabel,
             usernamesList:
               meta.usernamesList || (meta.username ? [meta.username] : []),
             totalRoses: meta.isRose
               ? Math.max(1, Number(meta.totalRoses) || 1)
               : 0,
           }
-        : undefined,
+        : {
+            shortLabel: defaultShortLabel,
+          },
     };
 
     const maxQueueSize = Math.max(
@@ -1743,9 +1959,10 @@ class SoundService {
       Math.min(200, config.maxTtsQueueSize ?? 40)
     );
     if (this.ttsQueue.length >= maxQueueSize) {
-      // Nếu đầy hàng chờ, ưu tiên xóa bớt các mục bình luận 1 điểm (!isRose) trước, giữ lại các mục tặng quà
       const nonGiftIndices = this.ttsQueue
-        .map((q, idx) => (!q.meta?.isRose && !q.isPriority ? idx : -1))
+        .map((q, idx) =>
+          !q.meta?.isRose && !q.isPriority && !q.isSessionSummary ? idx : -1
+        )
         .filter((idx) => idx !== -1);
       if (nonGiftIndices.length > 0) {
         const dropSet = new Set(
@@ -1757,15 +1974,20 @@ class SoundService {
       }
     }
 
-    // Gửi quà / gửi hoa thì ưu tiên đẩy lên đầu hàng chờ đọc (trước toàn bộ hàng chờ bình luận 1 điểm)
+    // Gửi quà / gửi hoa thì ưu tiên đẩy thẳng lên đầu hàng chờ đọc (ngay sau câu Tổng kết / Vòng mới nếu đang có, và đứng trước toàn bộ bình luận 1 điểm & câu vu vơ)
     if (isGiftOrPriority) {
-      const firstCommentIdx = this.ttsQueue.findIndex(
-        (q) => !q.isPriority && !q.meta?.isRose && !q.isTurboBatch
+      const firstNonPriorityIdx = this.ttsQueue.findIndex(
+        (q) =>
+          !q.isSessionSummary &&
+          !q.id.startsWith('round_start_') &&
+          !q.isTurboBatch &&
+          !q.isPriority &&
+          !q.meta?.isRose
       );
-      if (firstCommentIdx === -1) {
+      if (firstNonPriorityIdx === -1) {
         this.ttsQueue.push(queueItem);
       } else {
-        this.ttsQueue.splice(firstCommentIdx, 0, queueItem);
+        this.ttsQueue.splice(firstNonPriorityIdx, 0, queueItem);
       }
     } else {
       this.ttsQueue.push(queueItem);
@@ -1798,12 +2020,11 @@ class SoundService {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const startMs = Date.now();
 
-    const p = fetch(url, { signal: controller.signal })
+    const fetchPromise = fetch(url, { signal: controller.signal })
       .then(async (res) => {
-        clearTimeout(timer);
-        const latencyMs = Math.max(1, Date.now() - startMs);
         if (!res.ok) return null;
         const blob = await res.blob();
+        const latencyMs = Math.max(1, Date.now() - startMs);
         if (!blob || blob.size < 128) return null;
         const blobUrl = URL.createObjectURL(blob);
         if (this.audioBlobCache.size >= this.MAX_BLOB_CACHE) {
@@ -1829,14 +2050,18 @@ class SoundService {
         });
         return blobUrl;
       })
-      .catch(() => {
-        clearTimeout(timer);
-        return null;
-      })
+      .catch(() => null)
       .finally(() => {
+        clearTimeout(timer);
         this.inFlightPrefetches.delete(url);
       });
 
+    // Hard timeout bảo vệ tuyệt đối trường hợp stream bị treo giữa chừng
+    const hardTimeoutPromise = new Promise<string | null>((resolve) => {
+      setTimeout(() => resolve(null), timeoutMs + 250);
+    });
+
+    const p = Promise.race([fetchPromise, hardTimeoutPromise]);
     this.inFlightPrefetches.set(url, p);
     return p;
   }
@@ -1888,7 +2113,17 @@ class SoundService {
   }
 
   private processQueue(config: GameConfig) {
-    if (this.isSpeaking) return;
+    if (this.isSpeaking) {
+      // Watchdog tự động giải phóng nếu có 1 câu đọc bị treo quá 12 giây
+      if (
+        this.speakingStartedAt > 0 &&
+        Date.now() - this.speakingStartedAt > 12000
+      ) {
+        this.stopCurrentUtteranceOnly();
+      } else {
+        return;
+      }
+    }
     if (this.ttsQueue.length === 0) {
       this.activeEventItem = null;
       this.emitEventQueue();
@@ -1901,7 +2136,9 @@ class SoundService {
     // Các mục tặng hoa hồng / quà (isRose = true) hoặc NPC được giữ nguyên từng lượt để đọc chính xác số lượng hoa tặng!
     if (
       !nextItem.isTurboBatch &&
+      !nextItem.isSessionSummary &&
       !nextItem.meta?.isRose &&
+      !nextItem.meta?.isSpecialGift &&
       !nextItem.meta?.isNpc &&
       nextItem.meta?.provinceId &&
       nextItem.meta?.provinceName
@@ -1910,7 +2147,9 @@ class SoundService {
       const sameProvItems = this.ttsQueue.filter(
         (q) =>
           !q.isTurboBatch &&
+          !q.isSessionSummary &&
           !q.meta?.isRose &&
+          !q.meta?.isSpecialGift &&
           !q.meta?.isNpc &&
           q.meta?.provinceId === targetProvId
       );
@@ -1922,6 +2161,8 @@ class SoundService {
             (nextItem.meta.username ? [nextItem.meta.username] : [])
         );
         let totalPts = Number(nextItem.meta.pointsAdded || 1);
+        const startCbs = [nextItem.onStart];
+        const doneCbs = [nextItem.onDone];
 
         for (const extra of sameProvItems) {
           const extraNames =
@@ -1931,6 +2172,8 @@ class SoundService {
             allNames.add(n);
           }
           totalPts += Number(extra.meta?.pointsAdded || 1);
+          if (extra.onStart) startCbs.push(extra.onStart);
+          if (extra.onDone) doneCbs.push(extra.onDone);
         }
 
         const mergedList = Array.from(allNames);
@@ -1940,20 +2183,44 @@ class SoundService {
           totalPts,
           0,
           config,
-          true,
+          false,
           false
         );
 
         nextItem = {
           ...nextItem,
           text: combinedSpeech,
+          onStart: () => {
+            for (const cb of startCbs) {
+              if (cb) {
+                try {
+                  cb();
+                } catch {
+                  // Ignore
+                }
+              }
+            }
+          },
+          onDone: () => {
+            for (const cb of doneCbs) {
+              if (cb) {
+                try {
+                  cb();
+                } catch {
+                  // Ignore
+                }
+              }
+            }
+          },
           meta: {
             ...nextItem.meta,
             username: mergedList.join(', '),
             usernamesList: mergedList,
+            shortLabel: mergedList.join(', '),
             pointsAdded: totalPts,
             totalRoses: 0,
             isRose: false,
+            isSpecialGift: false,
             isNpc: false,
           },
         };
@@ -1984,6 +2251,7 @@ class SoundService {
     }
 
     this.isSpeaking = true;
+    this.speakingStartedAt = Date.now();
     this.activeEventItem = nextItem;
     this.currentEventText = nextText;
     this.emitStatus(
@@ -2001,7 +2269,7 @@ class SoundService {
       }
     }
 
-    // Prefetch trước tối đa 3 câu tiếp theo trong hàng chờ để nối câu Siêu Tốc không có độ trễ
+    // Prefetch trước tối đa 3 câu tiếp theo trong hàng chờ để nối câu không có độ trễ
     const voiceForPrefetch = config.nodeVoice || 'google-vi-gtx';
     for (let i = 0; i < Math.min(3, this.ttsQueue.length); i++) {
       const upcomingChunks = splitSpeechIntoChunks(this.ttsQueue[i].text, 165);
@@ -2017,6 +2285,7 @@ class SoundService {
       if (finishedOnce || token !== this.speechTokenSeq) return;
       finishedOnce = true;
       this.isSpeaking = false;
+      this.speakingStartedAt = 0;
       this.currentEventText = '';
       this.activeEventItem = null;
       if (this.ttsQueue.length === 0) {
@@ -2036,7 +2305,7 @@ class SoundService {
             this.processQueue(this.latestConfig);
           }
         },
-        isTurboItem ? 25 : 80
+        isTurboItem ? 25 : 65
       );
     };
 
@@ -2052,9 +2321,9 @@ class SoundService {
       const simDurationMs = Math.max(
         isTurboItem ? 750 : 1200,
         Math.min(
-          6500,
+          5500,
           Math.round(
-            (wordCount * (isTurboItem ? 210 : 290)) /
+            (wordCount * (isTurboItem ? 210 : 280)) /
               Math.max(0.5, effectiveConfig.ttsRate || 1)
           )
         )
@@ -2112,8 +2381,16 @@ class SoundService {
         void this.getOrFetchAudioBlobUrl(nextUrls.cloudFallbackUrl, 2400);
       }
 
+      let chunkFinished = false;
+      let chunkWatchdog: ReturnType<typeof setTimeout> | null = null;
+
       const advanceToNextChunk = () => {
-        if (token !== this.speechTokenSeq) return;
+        if (chunkFinished || token !== this.speechTokenSeq) return;
+        chunkFinished = true;
+        if (chunkWatchdog) {
+          clearTimeout(chunkWatchdog);
+          chunkWatchdog = null;
+        }
         this.currentAudio = null;
         if (chunkIdx + 1 < chunks.length) {
           playChunkAt(chunkIdx + 1);
@@ -2122,12 +2399,17 @@ class SoundService {
         }
       };
 
+      // Watchdog bảo vệ cho mỗi chunk (tối đa 8 giây phải chuyển tiếp để không bao giờ bị im lặng/treo hàng chờ)
+      chunkWatchdog = setTimeout(() => {
+        advanceToNextChunk();
+      }, 8000);
+
       const playBlobUrl = (
         blobUrl: string,
         sourceLabel: string,
         latencyMs: number
       ) => {
-        if (token !== this.speechTokenSeq) return;
+        if (chunkFinished || token !== this.speechTokenSeq) return;
         const audio = new Audio();
         audio.crossOrigin = 'anonymous';
         this.currentAudio = audio;
@@ -2152,6 +2434,8 @@ class SoundService {
         };
 
         audio.onplaying = () => {
+          this.speakingStartedAt = Date.now();
+          this.tryResumePendingBgm();
           this.ttsDiagnostic = {
             ...this.ttsDiagnostic,
             health: 'healthy',
@@ -2173,12 +2457,17 @@ class SoundService {
         };
 
         audio.play().catch(() => {
-          advanceToNextChunk();
+          // Nếu trình duyệt chặn autoplay âm thanh, giả lập thời gian đọc để game và camera vẫn chạy bình thường
+          const wordCount = currentChunkText.split(/\s+/).filter(Boolean).length;
+          const fallbackWaitMs = Math.max(900, Math.min(3500, wordCount * 220));
+          setTimeout(() => {
+            advanceToNextChunk();
+          }, fallbackWaitMs);
         });
       };
 
       void this.getOrFetchAudioBlobUrl(primaryUrl, 950).then((localBlob) => {
-        if (token !== this.speechTokenSeq) return;
+        if (chunkFinished || token !== this.speechTokenSeq) return;
         if (localBlob) {
           const meta = this.audioBlobMetaCache.get(primaryUrl);
           playBlobUrl(
@@ -2189,9 +2478,9 @@ class SoundService {
           return;
         }
 
-        void this.getOrFetchAudioBlobUrl(cloudFallbackUrl, 2400).then(
+        void this.getOrFetchAudioBlobUrl(cloudFallbackUrl, 2200).then(
           (cloudBlob) => {
-            if (token !== this.speechTokenSeq) return;
+            if (chunkFinished || token !== this.speechTokenSeq) return;
             if (cloudBlob) {
               const meta = this.audioBlobMetaCache.get(cloudFallbackUrl);
               playBlobUrl(
@@ -2201,7 +2490,11 @@ class SoundService {
               );
               return;
             }
-            advanceToNextChunk();
+            const wordCount = currentChunkText.split(/\s+/).filter(Boolean).length;
+            setTimeout(
+              () => advanceToNextChunk(),
+              Math.max(800, Math.min(2800, wordCount * 200))
+            );
           }
         );
       });

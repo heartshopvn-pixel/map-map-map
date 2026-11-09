@@ -196,6 +196,7 @@ export default function App() {
           npcAvatars={engine.npcAvatars}
           sessionEndSummary={engine.sessionEndSummary}
           cameraQueueCount={engine.cameraQueue.length}
+          eventTtsQueue={engine.eventTtsQueue}
           onUpdateConfig={engine.handleUpdateConfig}
           onResetAllProvinces={engine.handleResetAllProvinces}
           onSessionTimeUp={engine.handleSessionTimeUp}

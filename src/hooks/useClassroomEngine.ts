@@ -510,73 +510,6 @@ export function useClassroomEngine() {
   );
 
   /**
-   * Ghi nhận điểm số + lưu toàn bộ người chơi đóng góp trong phiên (tối đa 24 người/tỉnh) + đọc AI #3
-   * Đọc gộp TẤT CẢ tên người chơi trong lượt tỉnh đó cùng lúc kèm % câu chào / vu vơ hoặc lời cảm ơn nhiều hoa hồng!
-   */
-  const commitGiftTurnToProvinceAndTTS = useCallback(
-    (
-      provinceId: string,
-      provinceName: string,
-      senders: ProvinceContributor[],
-      totalPointsAdded: number,
-      totalRosesAdded: number,
-      totalGiftsAdded: number
-    ) => {
-      const cfg = configRef.current;
-      commitPointsOnlyToProvince(
-        provinceId,
-        provinceName,
-        senders,
-        totalPointsAdded,
-        totalRosesAdded,
-        totalGiftsAdded
-      );
-
-      const anyRose = totalRosesAdded > 0 || senders.some((s) => s.isRose);
-      const anyFromNpc = senders.some((s) => Boolean(s.isNpc));
-      // NPC hỗ trợ 1 điểm (!isRose) được coi là người chơi bình thường về danh xưng (không đọc từ "NPC"),
-      // nhưng tuyệt đối không đọc câu chào phòng / gợi ý gửi hoa cho NPC
-      const readNpcPrefix = senders.some((s) => Boolean(s.isNpc && s.isRose));
-      const uniqueNames = Array.from(new Set(senders.map((s) => s.username)));
-
-      const speechText =
-        uniqueNames.length > 1
-          ? soundEngine.formatBatchedProvinceGiftSpeech(
-              uniqueNames,
-              provinceName,
-              totalPointsAdded,
-              totalRosesAdded,
-              cfg,
-              !anyFromNpc,
-              readNpcPrefix
-            )
-          : soundEngine.formatProvinceGiftSpeech(
-              uniqueNames[0] || 'Người chơi',
-              provinceName,
-              totalPointsAdded,
-              anyRose,
-              cfg,
-              !anyFromNpc,
-              readNpcPrefix,
-              Math.max(1, totalRosesAdded)
-            );
-
-      soundEngine.enqueueTTS(speechText, anyRose, cfg, {
-        provinceId,
-        provinceName,
-        username: uniqueNames.join(', '),
-        usernamesList: uniqueNames,
-        reason: anyRose ? 'gift' : 'comment',
-        isRose: anyRose,
-        isNpc: anyFromNpc,
-        pointsAdded: totalPointsAdded,
-        totalRoses: totalRosesAdded,
-      });
-    },
-    [commitPointsOnlyToProvince]
-  );
-
-  /**
    * Gộp danh sách người gửi theo tên (không phân biệt hoa/thường),
    * giữ nguyên ID đầu tiên để Avatar to không bị tạo mới hay nhảy lại lần 2 khi cộng dồn bình luận +1đ và hoa hồng!
    */
@@ -596,6 +529,8 @@ export function useClassroomEngine() {
             pointsAdded: prev.pointsAdded + item.pointsAdded,
             roseCount: (prev.roseCount || 0) + (item.roseCount || 0),
             isRose: Boolean(prev.isRose || item.isRose),
+            isSpecialGift: Boolean(prev.isSpecialGift || item.isSpecialGift),
+            giftCoins: (prev.giftCoins || 0) + (item.giftCoins || 0),
             isNpc: Boolean(prev.isNpc || item.isNpc),
             timestamp: item.timestamp,
           });
@@ -609,13 +544,9 @@ export function useClassroomEngine() {
   );
 
   /**
-   * Bộ điều phối Camera hỗ trợ 2 chế độ:
-   * 1. 'continuous' (Phản ứng liên tục - mặc định): Nhảy thẳng sang tỉnh kế tiếp trong hàng chờ
-   * 2. 'alternating_overview' (Xen kẽ zoom tổng): Sau mỗi lượt tỉnh, zoom nhanh ra Map tổng rồi mới zoom vào tỉnh mới
-   * ĐẶC BIỆT:
-   * - ƯU TIÊN GIỮ ZOOM TỈNH nếu Giọng đọc AI #3 vẫn còn đang đọc chưa xong sự kiện của tỉnh đó!
-   * - Với người thật: tự động quét hàng chờ `cameraQueue`, rút những người thật vào cùng tỉnh ra đọc 1 lúc.
-   * - Với NPC: mỗi lần chỉ xử lý đúng 1 NPC duy nhất (không gộp nhiều NPC làm 1 lượt).
+   * Quy định Game: Camera chạy theo Giọng đọc AI (Lấy giọng đọc làm chuẩn 100%):
+   * - Khi giọng đọc AI bắt đầu đọc câu của tỉnh nào (`onStart`), Camera lập tức zoom tới tỉnh đó và ném Avatar.
+   * - Khi giọng đọc AI đọc xong câu của tỉnh đó (`onDone`) và không còn đang đọc tỉnh đó nữa, Camera tự động nhả về Map tổng (hoặc nhảy sang tỉnh của câu đọc kế tiếp).
    */
   useEffect(() => {
     const timer = setInterval(() => {
@@ -625,128 +556,18 @@ export function useClassroomEngine() {
 
       const now = Date.now();
       const curFocus = cameraFocusRef.current;
-      const queue = cameraQueueRef.current;
-      const cfg = configRef.current;
 
-      // Ưu tiên giữ nguyên Camera Zoom ở tỉnh nếu:
-      // 1) Chưa hết thời gian giữ tối thiểu (now < curFocus.until), HOẶC
-      // 2) Giọng đọc AI #3 vẫn còn đang đọc / chờ đọc chưa xong sự kiện của tỉnh đó!
-      if (
-        curFocus.provinceId &&
-        (now < curFocus.until ||
-          soundEngine.isSpeakingOrQueuedForProvince(curFocus.provinceId))
-      ) {
-        return;
-      }
-
-      // Nếu vừa kết thúc 1 lượt tỉnh và đang bật chế độ 2 (Xen kẽ zoom tổng) mà vẫn còn tỉnh mới trong hàng chờ:
-      if (
-        curFocus.provinceId !== null &&
-        cfg.cameraMode === 'alternating_overview' &&
-        queue.length > 0
-      ) {
-        const overviewHold = Math.max(350, cfg.cameraOverviewHoldMs || 650);
-        overviewPauseUntilRef.current = now + overviewHold;
-        const overviewFocus: CameraFocusState = {
-          provinceId: null,
-          until: now + overviewHold,
-        };
-        cameraFocusRef.current = overviewFocus;
-        setCameraFocus(overviewFocus);
-        return;
-      }
-
-      // Nếu đang trong nhịp dừng ở Map tổng (chế độ 2) thì đợi hết nhịp dừng rồi mới zoom vào tỉnh tiếp theo
-      if (
-        curFocus.provinceId === null &&
-        now < overviewPauseUntilRef.current
-      ) {
-        return;
-      }
-
-      if (queue.length > 0) {
-        const headItem = queue[0];
-        const targetProvId = headItem.provinceId;
-
-        // - Nếu mục đầu là NPC hoặc là Quà tặng / Hoa hồng (isRose): xử lý độc lập từng mục để đọc chính xác số bông hoa và số điểm của từng lượt tặng!
-        // - Nếu là bình luận 1 điểm của người chơi thật (!isNpc && !isRose): gom các bình luận 1 điểm có cùng `provinceId` để đọc nhanh
-        const sameProvinceItems =
-          headItem.isNpc || headItem.isRose
-            ? [headItem]
-            : queue.filter(
-                (item) =>
-                  item.provinceId === targetProvId &&
-                  !item.isNpc &&
-                  !item.isRose
-              );
-        const pickedIds = new Set(sameProvinceItems.map((item) => item.id));
-        const remainingQueue = queue.filter((item) => !pickedIds.has(item.id));
-
-        cameraQueueRef.current = remainingQueue;
-        setCameraQueue(remainingQueue);
-
-        const rawSenders: ProvinceContributor[] = [];
-        let mergedPoints = 0;
-        let mergedRoses = 0;
-        let mergedGifts = 0;
-        let anyRose = false;
-
-        for (const item of sameProvinceItems) {
-          rawSenders.push(...item.senders);
-          mergedPoints += item.pointsAdded;
-          mergedRoses += item.totalRoses;
-          mergedGifts += item.totalGifts;
-          if (item.isRose) anyRose = true;
+      if (curFocus.provinceId !== null) {
+        const activeSpokenProvinceId = soundEngine.getActiveSpokenProvinceId();
+        // Giữ zoom tỉnh nếu giọng đọc đang đọc chính tỉnh này hoặc chưa hết nhịp giữ ngắn sau khi đọc xong
+        if (
+          activeSpokenProvinceId === curFocus.provinceId ||
+          now < curFocus.until
+        ) {
+          return;
         }
 
-        const mergedSenders = mergeContributorsByUser([], rawSenders);
-
-        const uniqueSenderNames = Array.from(
-          new Set(mergedSenders.map((s) => s.username))
-        );
-
-        // Cộng điểm, lưu Avatar vào tỉnh và đọc tên người chơi của tỉnh này
-        commitGiftTurnToProvinceAndTTS(
-          targetProvId,
-          headItem.provinceName,
-          mergedSenders,
-          mergedPoints,
-          mergedRoses,
-          mergedGifts
-        );
-
-        const holdMs = Math.max(
-          1200,
-          Math.round((cfg.cameraHoldDurationSec || 2.5) * 1000)
-        );
-        const lastSender =
-          mergedSenders[mergedSenders.length - 1] || headItem.senders[0];
-        const nextFocus: CameraFocusState = {
-          provinceId: targetProvId,
-          provinceName: headItem.provinceName,
-          username: uniqueSenderNames.join(', '),
-          avatarUrl: lastSender?.avatarUrl || headItem.avatarUrl,
-          avatarColor: lastSender?.avatarColor || headItem.avatarColor,
-          pointsAdded: mergedPoints,
-          isRose: anyRose,
-          senders: mergedSenders,
-          totalRoses: mergedRoses,
-          totalGifts: anyRose ? Math.max(1, mergedRoses) : mergedGifts,
-          startedAt: now,
-          until: now + holdMs,
-        };
-        cameraFocusRef.current = nextFocus;
-        setCameraFocus(nextFocus);
-
-        setTimeout(() => {
-          spawnThrowAvatarFX({
-            provinceId: targetProvId,
-            provinceName: headItem.provinceName,
-            senders: mergedSenders,
-          });
-        }, 120);
-      } else if (curFocus.provinceId !== null) {
-        // Hàng chờ trống và sự kiện tỉnh đã đọc xong -> Zoom out về Map mặc định (chế độ chờ)
+        // Giọng đọc tỉnh đã kết thúc -> trả Camera về Map tổng (hoặc chờ câu tỉnh kế tiếp tự kích hoạt onStart)
         const resetFocus: CameraFocusState = {
           provinceId: null,
           until: 0,
@@ -754,10 +575,10 @@ export function useClassroomEngine() {
         cameraFocusRef.current = resetFocus;
         setCameraFocus(resetFocus);
       }
-    }, 85);
+    }, 100);
 
     return () => clearInterval(timer);
-  }, [commitGiftTurnToProvinceAndTTS, mergeContributorsByUser, spawnThrowAvatarFX]);
+  }, []);
 
   /**
    * Luồng Kết Thúc Phiên Chơi & Chuyển Sang Vòng Mới:
@@ -765,8 +586,7 @@ export function useClassroomEngine() {
    * - Đưa Camera về Map tổng
    * - Cộng +1 lần đạt Top 1 (`top1WinCount`) cho tỉnh dẫn đầu phiên (nếu có điểm > 0)
    * - Thông báo Kết Quả Phiên & đọc vinh danh Top 1, 2, 3 tỉnh bằng Giọng đọc AI #3
-   * - ƯU TIÊN THEO NGƯỜI ĐỌC: Ngay khi Giọng đọc AI #3 đọc xong câu tổng kết -> lập tức chuyển luồng sang vòng mới,
-   *   reset điểm phiên (giữ nguyên `top1WinCount`), reset danh sách 1-bình-luận/phiên, đọc lời chào Vòng mới và chạy tiếp hàng chờ tặng quà!
+   * - CHỈ ĐỌC HẾT NỘI DUNG BÁO KẾT QUẢ THÔI THÌ CHUYỂN SANG CÂU MỚI NGAY (không bị kẹt bởi các sự kiện đọc liên tục thêm mới trong lúc tổng kết!)
    */
   const handleSessionTimeUp = useCallback((sessionNum: number) => {
     if (isSessionEndingRef.current) return;
@@ -793,7 +613,6 @@ export function useClassroomEngine() {
     const top3 = sorted.slice(0, 3);
     const scoredTop3 = top3.filter((p) => p.points > 0);
     const top1WinnerId = scoredTop3.length > 0 ? scoredTop3[0].id : null;
-    const deferredCount = giftOnlyQueue.length;
     const sessionName = configRef.current.sessionTitle || 'Vòng';
 
     // Cập nhật ngay số lần đạt Top 1 cho tỉnh hạng nhất phiên này
@@ -827,13 +646,16 @@ export function useClassroomEngine() {
     }
 
     const speechText = summarySentences.join(' ');
+    const deferredGiftCount = soundEngine
+      .getEventQueueSnapshot()
+      .detailedQueue.filter((q) => Boolean(q.meta?.isRose)).length;
 
     setSessionEndSummary({
       sessionNum,
       sessionTitle: sessionName,
       top3,
       top5,
-      deferredQueueCount: deferredCount,
+      deferredQueueCount: deferredGiftCount,
       speechText,
     });
 
@@ -884,53 +706,31 @@ export function useClassroomEngine() {
       });
     };
 
-    // Đọc lần lượt đầy đủ tất cả các câu tổng kết Top 3 tỉnh.
-    // CHỈ KHI NGƯỜI ĐỌC ĐỌC XONG HẾT toàn bộ phần tổng kết mới chuyển sang phiên game mới!
+    // CHỈ ĐỌC HẾT NỘI DUNG BÁO KẾT QUẢ THÔI THÌ CHUYỂN SANG CÂU MỚI NGAY!
+    // Tuyệt đối không chờ các sự kiện khác trong hàng chờ để bảng tổng kết không bao giờ bị kẹt.
     soundEngine.announceSessionResultNow(
       summarySentences,
       configRef.current,
       () => {
-        const waitUntilSummaryDone = () => {
-          if (transitioned) return;
-          if (soundEngine.isSessionSummarySpeakingOrQueued()) {
-            window.setTimeout(waitUntilSummaryDone, 200);
-            return;
-          }
-          window.setTimeout(transitionToNextRound, 300);
-        };
-        waitUntilSummaryDone();
+        window.setTimeout(transitionToNextRound, 180);
       }
     );
 
-    // Bộ kiểm tra an toàn: Nếu người đọc vẫn đang đọc phần tổng kết thì tiếp tục chờ,
-    // tuyệt đối không ngắt ngang khi đang đọc tổng kết!
-    const startedSummaryAt = Date.now();
-    const checkSummarySafety = () => {
-      if (transitioned) return;
-      const elapsedMs = Date.now() - startedSummaryAt;
-      if (
-        soundEngine.isSessionSummarySpeakingOrQueued() &&
-        elapsedMs < 90000
-      ) {
-        sessionEndTimeoutRef.current = window.setTimeout(
-          checkSummarySafety,
-          1000
-        );
-        return;
-      }
-      transitionToNextRound();
-    };
+    // Bộ bảo vệ an toàn cứng (tối đa 9.5 giây chắc chắn chuyển sang vòng mới kể cả khi mạng lag)
     if (sessionEndTimeoutRef.current) {
       window.clearTimeout(sessionEndTimeoutRef.current);
     }
-    sessionEndTimeoutRef.current = window.setTimeout(checkSummarySafety, 8000);
+    sessionEndTimeoutRef.current = window.setTimeout(() => {
+      transitionToNextRound();
+    }, 9500);
   }, []);
 
   /**
-   * Hàm trung tâm xử lý khi người chơi bình luận đến tỉnh (+1đ) hoặc gửi hoa hồng (+5đ)
-   * - Trong mỗi phiên: người chơi chỉ được bình luận 1 lần để +1 điểm (nhưng có thể tặng nhiều hoa hồng & nhiều điểm không giới hạn!)
-   * - Gửi quà / gửi hoa (isRose = true) luôn được ưu tiên đẩy lên ĐẦU hàng chờ đọc (trước các bình luận 1 điểm)
-   * - Mỗi lượt tặng hoa được giữ nguyên số lượng hoa và số điểm chính xác, không tự động gộp làm sai lệch số bông hoa
+   * Hàm trung tâm xử lý khi người chơi bình luận đến tỉnh (+1đ), tặng hoa / quà 1 coin (+5đ) hoặc tặng quà đặc biệt >1 coin (coin * 5đ)
+   * - Lấy Giọng Đọc AI làm chuẩn 100%: Mọi sự kiện được đưa vào hàng chờ đọc `soundEngine.enqueueTTS`,
+   *   khi giọng đọc bắt đầu phát câu của tỉnh nào (`onStart`) thì Camera mới chạy tới tỉnh đó và cộng điểm + ném Avatar!
+   * - Quà tặng / hoa hồng (isRose = true) luôn được ưu tiên đẩy lên ĐẦU hàng chờ đọc.
+   * - Khi cùng 1 người chơi vừa comment +1đ và tặng hoa ngay tiếp theo ở tỉnh đang zoom: gộp làm 1 Avatar to duy nhất (không nhảy 2 lần).
    */
   const executeProvinceGift = useCallback(
     (
@@ -940,6 +740,8 @@ export function useClassroomEngine() {
         username: string;
         avatarUrl?: string | null;
         isRose: boolean;
+        isSpecialGift?: boolean;
+        giftCoins?: number;
         isNpc?: boolean;
         pointsOverride?: number;
         roseCountOverride?: number;
@@ -956,7 +758,17 @@ export function useClassroomEngine() {
       const cleanUser = (payload.username || 'Người Chơi').trim();
       const userKey = cleanUser.toLowerCase();
       const isFromNpc = Boolean(payload.isNpc);
+      const isSpecialGift = Boolean(payload.isSpecialGift);
       const now = Date.now();
+
+      // Luôn ghi nhớ tỉnh người chơi chọn để khi họ tặng quà sẽ cộng về đúng tỉnh đó
+      userProvinceMemoryRef.current.set(userKey, targetProv.id);
+
+      // Nếu đang ở bảng tổng kết cuối phiên: bỏ qua bình luận 1 điểm (không khóa lượt comment của họ ở vòng mới),
+      // chỉ giữ lại quà tặng (isRose = true) trong hàng chờ cho vòng mới!
+      if (isSessionEndingRef.current && !payload.isRose) {
+        return { ok: false, reason: 'session_ending_comment_ignored' };
+      }
 
       // 1. Chống thực thi trùng lặp theo eventId
       const eventId =
@@ -974,15 +786,23 @@ export function useClassroomEngine() {
       const roseCount = payload.isRose
         ? Math.max(1, Number(payload.roseCountOverride) || 1)
         : 0;
+      const giftCoins =
+        payload.giftCoins !== undefined
+          ? Math.max(1, Number(payload.giftCoins) || 1)
+          : roseCount;
       const pointsAdded =
         payload.pointsOverride !== undefined
           ? Math.max(1, Number(payload.pointsOverride) || 1)
           : payload.isRose
-          ? Math.max(1, (cfg.rosePoints || 5) * roseCount)
+          ? Math.max(
+              1,
+              (cfg.rosePoints || 5) *
+                (isSpecialGift ? Math.max(2, giftCoins) : roseCount)
+            )
           : Math.max(1, cfg.commentPoints || 1);
 
-      // 2. Chống bị bắn đúp cùng 1 gói quà / bình luận (chặn 5000ms đối với gói đồng bộ chéo giữa 2 tab để tuyệt đối không bị x2 quà khi mở 2 cửa sổ)
-      const fingerprint = `${userKey}:${targetProv.id}:${payload.isRose ? 'R' : 'C'}:${pointsAdded}:${roseCount}:${isFromNpc ? 'N' : 'U'}`;
+      // 2. Chống bị bắn đúp cùng 1 gói quà / bình luận
+      const fingerprint = `${userKey}:${targetProv.id}:${payload.isRose ? 'R' : 'C'}:${isSpecialGift ? 'S' : 'N'}:${pointsAdded}:${roseCount}:${isFromNpc ? 'N' : 'U'}`;
       const lastExecAt =
         recentGiftFingerprintMapRef.current.get(fingerprint) || 0;
       const throttleWindowMs = broadcastSync ? 380 : 5000;
@@ -990,9 +810,6 @@ export function useClassroomEngine() {
         return { ok: false, reason: 'duplicate_gift_throttled' };
       }
       recentGiftFingerprintMapRef.current.set(fingerprint, now);
-
-      // Luôn ghi nhớ tỉnh người chơi chọn để khi họ tặng hoa hồng sẽ cộng về đúng tỉnh đó
-      userProvinceMemoryRef.current.set(userKey, targetProv.id);
 
       // Kiểm tra giới hạn: Trong mỗi phiên, người chơi thật chỉ được comment 1 lần để +1 điểm
       if (
@@ -1024,232 +841,30 @@ export function useClassroomEngine() {
         avatarColor,
         pointsAdded,
         isRose: payload.isRose,
+        isSpecialGift,
+        giftCoins,
         isNpc: isFromNpc,
         roseCount,
         timestamp: now,
       };
 
-      const singleQueueItem: CameraQueueItem = {
-        id: `cam_${now}_${Math.random().toString(36).slice(2, 6)}`,
-        provinceId: targetProv.id,
-        provinceName: targetProv.name,
-        username: cleanUser,
-        avatarUrl,
-        avatarColor,
+      const readNpcPrefix = Boolean(isFromNpc && payload.isRose);
+      const speechText = soundEngine.formatProvinceGiftSpeech(
+        cleanUser,
+        targetProv.name,
         pointsAdded,
-        isRose: payload.isRose,
-        isNpc: isFromNpc,
-        addedAt: now,
-        senders: [contributor],
-        totalRoses: roseCount,
-        totalGifts: payload.isRose ? Math.max(1, roseCount) : 1,
-      };
+        payload.isRose,
+        cfg,
+        !isFromNpc,
+        readNpcPrefix,
+        Math.max(1, roseCount),
+        isSpecialGift
+      );
 
-      // Hàm phụ trợ: Đưa vào hàng chờ Camera đồng bộ qua `cameraQueueRef.current`
-      // - Nếu là Quà tặng / Hoa hồng (payload.isRose = true): ƯU TIÊN ĐẨY LÊN ĐẦU HÀNG CHỜ (trước toàn bộ các bình luận 1 điểm)
-      //   và giữ nguyên từng lượt quà độc lập để đọc chính xác số lượng hoa tặng!
-      // - Nếu là bình luận 1 điểm (!payload.isRose && !isFromNpc): gom chung các bình luận 1 điểm cùng tỉnh.
-      const enqueueAndMergeSameProvince = () => {
-        const prev = cameraQueueRef.current;
-
-        if (payload.isRose) {
-          const firstCommentIdx = prev.findIndex((q) => !q.isRose);
-          const next =
-            firstCommentIdx === -1
-              ? [...prev.slice(-40), singleQueueItem]
-              : [
-                  ...prev.slice(0, firstCommentIdx),
-                  singleQueueItem,
-                  ...prev.slice(firstCommentIdx),
-                ].slice(0, 45);
-          cameraQueueRef.current = next;
-          setCameraQueue(next);
-          return;
-        }
-
-        if (!isFromNpc) {
-          const existingIdx = prev.findIndex(
-            (q) => q.provinceId === targetProv.id && !q.isNpc && !q.isRose
-          );
-          if (existingIdx !== -1) {
-            const next = [...prev];
-            const targetItem = next[existingIdx];
-            const mergedSenders = mergeContributorsByUser(targetItem.senders, [
-              contributor,
-            ]);
-            const uniqueNames = Array.from(
-              new Set(mergedSenders.map((s) => s.username))
-            );
-            next[existingIdx] = {
-              ...targetItem,
-              username: uniqueNames.join(', '),
-              pointsAdded: targetItem.pointsAdded + pointsAdded,
-              isRose: false,
-              isNpc: false,
-              senders: mergedSenders,
-              totalRoses: 0,
-              totalGifts: targetItem.totalGifts + 1,
-            };
-            cameraQueueRef.current = next;
-            setCameraQueue(next);
-            return;
-          }
-        }
-        const appended = [...prev.slice(-40), singleQueueItem];
-        cameraQueueRef.current = appended;
-        setCameraQueue(appended);
-      };
-
-      // Nếu đang trong luồng tổng kết cuối phiên: bỏ qua bình luận 1 điểm, chỉ giữ lại hàng chờ tặng quà (isRose = true) cho phiên sau!
-      if (isSessionEndingRef.current) {
-        if (!payload.isRose) {
-          return { ok: false, reason: 'session_ending_comment_ignored' };
-        }
-        enqueueAndMergeSameProvince();
-        if (broadcastSync) {
-          syncService.sendCommand('SEND_PROVINCE_GIFT', {
-            eventId,
-            provinceId: targetProv.id,
-            username: cleanUser,
-            avatarUrl,
-            isRose: payload.isRose,
-            isNpc: isFromNpc,
-            pointsOverride: pointsAdded,
-            roseCountOverride: roseCount,
-            bypassCommentLimit: true,
-          });
-        }
-        return { ok: true };
-      }
-
-      if (cfg.cameraAutoZoom) {
-        const curFocus = cameraFocusRef.current;
-        const inOverviewPause =
-          curFocus.provinceId === null && now < overviewPauseUntilRef.current;
-        const curProvinceStillActive =
-          Boolean(curFocus.provinceId) &&
-          (now < curFocus.until ||
-            soundEngine.isSpeakingOrQueuedForProvince(curFocus.provinceId!));
-
-        const activeFocusHasNpc = Boolean(
-          curFocus.senders?.some((s) => Boolean(s.isNpc))
-        );
-        const prevSenders = curFocus.senders || [];
-        const alreadyHadThisUser = prevSenders.some(
-          (s) => s.username.toLowerCase() === userKey
-        );
-
-        // Trường hợp 1: Camera ĐANG đứng ở đúng tỉnh này và đang active:
-        // - Khi cùng 1 người chơi vừa comment +1đ (!curFocus.isRose) và tặng hoa ngay tiếp theo (payload.isRose):
-        //   cộng dồn vào chung 1 Avatar to duy nhất (không nhảy Avatar 2 lần) và giữ đúng số bông hoa vừa tặng (roseCount)!
-        // - Hoặc khi có thêm bình luận 1 điểm (!payload.isRose && !curFocus.isRose) vào tỉnh đang đứng.
-        // - Tuyệt đối KHÔNG gộp 2 lượt tặng hoa (curFocus.isRose && payload.isRose) vào nhau để không bao giờ bị x2 số hoa hay x2 điểm trên màn hình!
-        const canMergeIntoActiveFocus =
-          !isFromNpc &&
-          !activeFocusHasNpc &&
-          curProvinceStillActive &&
-          curFocus.provinceId === targetProv.id &&
-          ((!curFocus.isRose && !payload.isRose) ||
-            (!curFocus.isRose && payload.isRose && alreadyHadThisUser));
-
-        if (canMergeIntoActiveFocus) {
-          commitGiftTurnToProvinceAndTTS(
-            targetProv.id,
-            targetProv.name,
-            [contributor],
-            pointsAdded,
-            roseCount,
-            1
-          );
-
-          const nextSenders = mergeContributorsByUser(prevSenders, [
-            contributor,
-          ]);
-          const nextPoints = payload.isRose
-            ? pointsAdded
-            : (curFocus.pointsAdded || 0) + pointsAdded;
-          const nextRoses = payload.isRose
-            ? roseCount
-            : curFocus.totalRoses || 0;
-          const nextGifts = payload.isRose
-            ? Math.max(1, roseCount)
-            : (curFocus.totalGifts || 1) + 1;
-
-          const extendedFocus: CameraFocusState = {
-            ...curFocus,
-            username: cleanUser,
-            avatarUrl,
-            avatarColor,
-            pointsAdded: nextPoints,
-            isRose: Boolean(curFocus.isRose || payload.isRose),
-            senders: nextSenders,
-            totalRoses: nextRoses,
-            totalGifts: nextGifts,
-            until: Math.max(curFocus.until, now + 1350),
-          };
-          cameraFocusRef.current = extendedFocus;
-          setCameraFocus(extendedFocus);
-
-          if (!alreadyHadThisUser) {
-            spawnThrowAvatarFX({
-              provinceId: targetProv.id,
-              provinceName: targetProv.name,
-              senders: [contributor],
-            });
-          } else {
-            soundEngine.playGiftThrowSfx(
-              payload.isRose,
-              configRef.current.sfxVolume
-            );
-          }
-        } else if (
-          !inOverviewPause &&
-          !curProvinceStillActive &&
-          cameraQueueRef.current.length === 0
-        ) {
-          // Trường hợp 2: Camera đang rảnh -> Cộng điểm + đọc TTS + Zoom vào ngay với số hoa và số điểm chính xác
-          commitGiftTurnToProvinceAndTTS(
-            targetProv.id,
-            targetProv.name,
-            [contributor],
-            pointsAdded,
-            roseCount,
-            1
-          );
-
-          const holdMs = Math.max(
-            1200,
-            Math.round((cfg.cameraHoldDurationSec || 2.5) * 1000)
-          );
-          const nextFocus: CameraFocusState = {
-            provinceId: targetProv.id,
-            provinceName: targetProv.name,
-            username: cleanUser,
-            avatarUrl,
-            avatarColor,
-            pointsAdded,
-            isRose: payload.isRose,
-            senders: [contributor],
-            totalRoses: roseCount,
-            totalGifts: payload.isRose ? Math.max(1, roseCount) : 1,
-            startedAt: now,
-            until: now + holdMs,
-          };
-          cameraFocusRef.current = nextFocus;
-          setCameraFocus(nextFocus);
-          setTimeout(() => {
-            spawnThrowAvatarFX({
-              provinceId: targetProv.id,
-              provinceName: targetProv.name,
-              senders: [contributor],
-            });
-          }, 120);
-        } else {
-          // Trường hợp 3: Đưa vào hàng chờ Camera (nếu là quà/hoa hồng sẽ tự động nhảy lên đầu hàng chờ!)
-          enqueueAndMergeSameProvince();
-        }
-      } else {
-        commitGiftTurnToProvinceAndTTS(
+      // Khi giọng đọc AI bắt đầu đọc mục này -> Cộng điểm + điều khiển Camera chạy theo giọng đọc!
+      const handleVoiceStart = () => {
+        const startNow = Date.now();
+        commitPointsOnlyToProvince(
           targetProv.id,
           targetProv.name,
           [contributor],
@@ -1257,11 +872,160 @@ export function useClassroomEngine() {
           roseCount,
           1
         );
-        spawnThrowAvatarFX({
+
+        if (configRef.current.cameraAutoZoom) {
+          const curFocus = cameraFocusRef.current;
+          const holdMs = Math.max(
+            1500,
+            Math.round((configRef.current.cameraHoldDurationSec || 2.5) * 1000)
+          );
+
+          const prevSenders = curFocus.senders || [];
+          const alreadyHadThisUser = prevSenders.some(
+            (s) => s.username.toLowerCase() === userKey
+          );
+
+          // Gộp chung làm 1 Avatar to nếu:
+          // 1) Nhiều bình luận 1 điểm cùng tỉnh được gom đọc chung trong cùng 1 lượt (startNow - curFocus.startedAt < 350ms), HOẶC
+          // 2) Cùng 1 người chơi vừa comment +1đ ở tỉnh này xong lại tặng hoa/quà ngay lập tức (không nhảy Avatar 2 lần!)
+          const shouldMergeFocus =
+            curFocus.provinceId === targetProv.id &&
+            ((!curFocus.isRose &&
+              !payload.isRose &&
+              startNow - (curFocus.startedAt || 0) < 350) ||
+              (!curFocus.isRose && payload.isRose && alreadyHadThisUser));
+
+          if (shouldMergeFocus) {
+            const nextSenders = mergeContributorsByUser(prevSenders, [
+              contributor,
+            ]);
+            const uniqueSenderNames = Array.from(
+              new Set(nextSenders.map((s) => s.username))
+            );
+            const nextPoints = payload.isRose
+              ? pointsAdded
+              : (curFocus.pointsAdded || 0) + pointsAdded;
+            const nextRoses = payload.isRose
+              ? roseCount
+              : curFocus.totalRoses || 0;
+            const nextGifts = payload.isRose
+              ? Math.max(1, roseCount)
+              : (curFocus.totalGifts || 1) + 1;
+
+            const extendedFocus: CameraFocusState = {
+              ...curFocus,
+              provinceId: targetProv.id,
+              provinceName: targetProv.name,
+              username: uniqueSenderNames.join(', '),
+              avatarUrl,
+              avatarColor,
+              pointsAdded: nextPoints,
+              isRose: Boolean(curFocus.isRose || payload.isRose),
+              isSpecialGift: Boolean(curFocus.isSpecialGift || isSpecialGift),
+              giftCoins: isSpecialGift ? giftCoins : curFocus.giftCoins,
+              senders: nextSenders,
+              totalRoses: nextRoses,
+              totalGifts: nextGifts,
+              until: startNow + holdMs,
+            };
+            cameraFocusRef.current = extendedFocus;
+            setCameraFocus(extendedFocus);
+
+            if (!alreadyHadThisUser) {
+              spawnThrowAvatarFX({
+                provinceId: targetProv.id,
+                provinceName: targetProv.name,
+                senders: [contributor],
+              });
+            } else {
+              soundEngine.playGiftThrowSfx(
+                payload.isRose,
+                configRef.current.sfxVolume
+              );
+            }
+          } else {
+            const nextFocus: CameraFocusState = {
+              provinceId: targetProv.id,
+              provinceName: targetProv.name,
+              username: cleanUser,
+              avatarUrl,
+              avatarColor,
+              pointsAdded,
+              isRose: payload.isRose,
+              isSpecialGift,
+              giftCoins,
+              senders: [contributor],
+              totalRoses: roseCount,
+              totalGifts: payload.isRose ? Math.max(1, roseCount) : 1,
+              startedAt: startNow,
+              until: startNow + holdMs,
+            };
+            cameraFocusRef.current = nextFocus;
+            setCameraFocus(nextFocus);
+            spawnThrowAvatarFX({
+              provinceId: targetProv.id,
+              provinceName: targetProv.name,
+              senders: [contributor],
+            });
+          }
+        } else {
+          spawnThrowAvatarFX({
+            provinceId: targetProv.id,
+            provinceName: targetProv.name,
+            senders: [contributor],
+          });
+        }
+      };
+
+      const handleVoiceDone = () => {
+        if (cameraFocusRef.current.provinceId === targetProv.id) {
+          const tailHoldMs =
+            configRef.current.cameraMode === 'alternating_overview' ? 180 : 420;
+          const updated: CameraFocusState = {
+            ...cameraFocusRef.current,
+            until: Date.now() + tailHoldMs,
+          };
+          cameraFocusRef.current = updated;
+          setCameraFocus(updated);
+        }
+      };
+
+      const shortLabel = isSpecialGift
+        ? `🎁 ${cleanUser}`
+        : payload.isRose
+        ? `🌹 ${cleanUser}`
+        : cleanUser;
+
+      soundEngine.enqueueTTS(
+        speechText,
+        payload.isRose,
+        cfg,
+        {
           provinceId: targetProv.id,
           provinceName: targetProv.name,
-          senders: [contributor],
-        });
+          username: cleanUser,
+          usernamesList: [cleanUser],
+          shortLabel,
+          reason: payload.isRose ? 'gift' : 'comment',
+          isRose: payload.isRose,
+          isSpecialGift,
+          giftCoins,
+          isNpc: isFromNpc,
+          pointsAdded,
+          totalRoses: roseCount,
+        },
+        handleVoiceStart,
+        handleVoiceDone
+      );
+
+      // Nếu là bình luận +1đ của người chơi thật: có tỉ lệ thêm sự kiện âm thanh "Khích lệ hoa" hoặc "Nói vu vơ" tách riêng trong hàng chờ
+      if (!isFromNpc && !payload.isRose) {
+        soundEngine.maybeEnqueueFollowUpChatter(
+          cleanUser,
+          targetProv.name,
+          cfg,
+          false
+        );
       }
 
       if (broadcastSync) {
@@ -1271,6 +1035,8 @@ export function useClassroomEngine() {
           username: cleanUser,
           avatarUrl,
           isRose: payload.isRose,
+          isSpecialGift,
+          giftCoins,
           isNpc: isFromNpc,
           pointsOverride: pointsAdded,
           roseCountOverride: roseCount,
@@ -1279,7 +1045,7 @@ export function useClassroomEngine() {
       }
       return { ok: true };
     },
-    [commitGiftTurnToProvinceAndTTS, mergeContributorsByUser, spawnThrowAvatarFX]
+    [commitPointsOnlyToProvince, mergeContributorsByUser, spawnThrowAvatarFX]
   );
 
   // Xử lý bình luận từ người chơi (TikTok Live hoặc Test)
@@ -1330,14 +1096,21 @@ export function useClassroomEngine() {
     [customWords, executeProvinceGift, safetyActionMode, safetyCategories]
   );
 
-  // Xử lý khi người chơi tặng quà trên TikTok Live
+  /**
+   * Xử lý khi người chơi tặng quà trên TikTok Live:
+   * - Khi tặng các món quà khác hoa hồng nhưng cùng 1 coin thì vẫn coi như hoa hồng.
+   * - Nếu món quà trị giá nhiều hơn 1 coin (>1 coin):
+   *   + Đọc: "[Tên] là tặng 1 món quà đặc biệt kèm [Điểm] điểm về [Tỉnh]"
+   *   + Số điểm lấy tổng số coin nhân với hệ số 5 (hoặc rosePoints mặc định = 5).
+   */
   const handleUserGift = useCallback(
     (
       rawUsername: string,
       giftName: string,
       coins: number,
       repeatCount = 1,
-      avatarUrl?: string | null
+      avatarUrl?: string | null,
+      diamondCount?: number
     ) => {
       const inspection = inspectUserInteraction(
         rawUsername || 'Người Chơi',
@@ -1363,11 +1136,19 @@ export function useClassroomEngine() {
 
       if (!targetProvinceId) return;
 
-      const flowerCount = Math.max(1, Number(repeatCount) || 1);
-      const coinUnits = Math.max(flowerCount, Number(coins) || flowerCount);
+      const cleanRepeat = Math.max(1, Number(repeatCount) || 1);
+      const totalCoins = Math.max(cleanRepeat, Number(coins) || cleanRepeat);
+      const unitCoinValue =
+        diamondCount !== undefined && Number(diamondCount) > 0
+          ? Number(diamondCount)
+          : Math.max(1, Math.round(totalCoins / cleanRepeat));
+
+      // Món quà trị giá > 1 coin được tính là Quà Đặc Biệt; món quà 1 coin được coi như Hoa Hồng
+      const isSpecialGift = unitCoinValue > 1;
+      const flowerCount = isSpecialGift ? 1 : cleanRepeat;
       const baseRosePoints = Math.max(1, configRef.current.rosePoints || 5);
-      const totalPoints = baseRosePoints * coinUnits;
-      const deterministicEventId = `tiktok_gift_${safeName.toLowerCase()}_${targetProvinceId}_${flowerCount}_${totalPoints}_${Math.floor(
+      const totalPoints = totalCoins * baseRosePoints;
+      const deterministicEventId = `tiktok_gift_${safeName.toLowerCase()}_${targetProvinceId}_${totalCoins}_${totalPoints}_${Math.floor(
         Date.now() / 4200
       )}`;
 
@@ -1378,6 +1159,8 @@ export function useClassroomEngine() {
           username: safeName,
           avatarUrl: avatarUrl || null,
           isRose: true,
+          isSpecialGift,
+          giftCoins: totalCoins,
           isNpc: false,
           pointsOverride: totalPoints,
           roseCountOverride: flowerCount,
@@ -1393,11 +1176,8 @@ export function useClassroomEngine() {
     const unsubStatus = syncService.onStatusChange((st) => setWsStatus(st));
     const unsubPeers = syncService.onPeerCountChange((counts) => {
       setPeerCounts(counts);
-      if (!isObsView) {
-        soundEngine.setRemoteSlaveMode(counts.obsPeers > 0);
-        if (counts.obsPeers > 0) {
-          soundEngine.broadcastBgmSync(true);
-        }
+      if (!isObsView && counts.obsPeers > 0) {
+        soundEngine.broadcastBgmSync(true);
       }
     });
 
@@ -1417,7 +1197,8 @@ export function useClassroomEngine() {
           ev.giftName || 'Hoa hồng',
           ev.coins || 1,
           ev.repeatCount || ev.comboCount || 1,
-          ev.avatarUrl || ev.profilePictureUrl || null
+          ev.avatarUrl || ev.profilePictureUrl || null,
+          ev.diamondCount
         );
       } else if (ev.type === 'member') {
         const rawUser = (ev.username || '').trim();
@@ -1455,6 +1236,8 @@ export function useClassroomEngine() {
             username: payload.username,
             avatarUrl: payload.avatarUrl,
             isRose: Boolean(payload.isRose),
+            isSpecialGift: Boolean(payload.isSpecialGift),
+            giftCoins: payload.giftCoins,
             isNpc: Boolean(payload.isNpc),
             pointsOverride: payload.pointsOverride,
             roseCountOverride: payload.roseCountOverride,
@@ -1684,7 +1467,9 @@ export function useClassroomEngine() {
       specificProvinceId?: string,
       customUsername?: string,
       isNpc = false,
-      roseCountOverride = 1
+      roseCountOverride = 1,
+      isSpecialGift = false,
+      giftCoinsOverride?: number
     ) => {
       const list = provincesRef.current;
       if (list.length === 0) return;
@@ -1699,6 +1484,9 @@ export function useClassroomEngine() {
           : names[Math.floor(Math.random() * names.length)];
       const avatarUrl = avatars[Math.floor(Math.random() * avatars.length)];
       const cleanCount = isRose ? Math.max(1, roseCountOverride || 1) : 1;
+      const coinCount = isSpecialGift
+        ? Math.max(2, giftCoinsOverride || cleanCount)
+        : cleanCount;
 
       executeProvinceGift(
         {
@@ -1706,10 +1494,12 @@ export function useClassroomEngine() {
           username,
           avatarUrl,
           isRose,
+          isSpecialGift,
+          giftCoins: coinCount,
           isNpc,
-          roseCountOverride: cleanCount,
+          roseCountOverride: isSpecialGift ? 1 : cleanCount,
           pointsOverride: isRose
-            ? Math.max(1, (configRef.current.rosePoints || 5) * cleanCount)
+            ? Math.max(1, (configRef.current.rosePoints || 5) * coinCount)
             : undefined,
         },
         true
@@ -1869,7 +1659,7 @@ export function useClassroomEngine() {
       },
     ];
 
-    // 1. Các mục đã cộng điểm và đang nằm chờ trong ttsQueue
+    // 1. Các mục đang nằm chờ trong ttsQueue
     for (const ttsItem of pendingTtsItems) {
       const provId = ttsItem.meta?.provinceId;
       const rawProvName = ttsItem.meta?.provinceName || 'Tỉnh';
@@ -1883,6 +1673,7 @@ export function useClassroomEngine() {
       ).join(', ');
       const pts = Number(ttsItem.meta?.pointsAdded || 1);
       const isRose = Boolean(ttsItem.meta?.isRose);
+      const origOnStart = ttsItem.onStart;
 
       batchSteps.push({
         text: `${cleanNames} gửi điểm về ${cleanProv}`,
@@ -1892,16 +1683,28 @@ export function useClassroomEngine() {
         pointsAdded: pts,
         isRose,
         onStart: () => {
+          if (origOnStart) {
+            try {
+              origOnStart();
+            } catch {
+              // Ignore
+            }
+          }
           if (!provId) return;
           const now = Date.now();
           const targetProv = provincesRef.current.find((p) => p.id === provId);
           const turboFocus: CameraFocusState = {
+            ...cameraFocusRef.current,
             provinceId: provId,
             provinceName: rawProvName,
             username: cleanNames,
             pointsAdded: pts,
             isRose,
-            senders: targetProv?.recentContributors?.slice(0, 4) || [],
+            senders:
+              cameraFocusRef.current.provinceId === provId &&
+              cameraFocusRef.current.senders?.length
+                ? cameraFocusRef.current.senders
+                : targetProv?.recentContributors?.slice(0, 4) || [],
             startedAt: now,
             isTurboPan: true,
             until: now + 950,

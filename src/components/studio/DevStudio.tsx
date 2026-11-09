@@ -70,7 +70,9 @@ interface DevStudioProps {
     specificProvinceId?: string,
     customUsername?: string,
     isNpc?: boolean,
-    roseCountOverride?: number
+    roseCountOverride?: number,
+    isSpecialGift?: boolean,
+    giftCoinsOverride?: number
   ) => void;
   onTriggerBatchSameProvince: (
     provinceId?: string,

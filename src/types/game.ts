@@ -27,6 +27,8 @@ export interface ProvinceContributor {
   avatarColor: string;
   pointsAdded: number;
   isRose: boolean;
+  isSpecialGift?: boolean;
+  giftCoins?: number;
   isNpc?: boolean;
   roseCount?: number;
   timestamp: number;
@@ -75,6 +77,8 @@ export interface CameraQueueItem {
   avatarColor: string;
   pointsAdded: number;
   isRose: boolean;
+  isSpecialGift?: boolean;
+  giftCoins?: number;
   isNpc?: boolean;
   addedAt: number;
   /** Danh sách người gửi được gom chung trong 1 lượt zoom tỉnh */
@@ -91,6 +95,8 @@ export interface CameraFocusState {
   avatarColor?: string;
   pointsAdded?: number;
   isRose?: boolean;
+  isSpecialGift?: boolean;
+  giftCoins?: number;
   senders?: ProvinceContributor[];
   totalRoses?: number;
   totalGifts?: number;
@@ -148,6 +154,7 @@ export type LayoutElementKey =
   | 'visitingBar'
   | 'giftGuideIcons'
   | 'howToPlayBoard'
+  | 'eventQueueBoard'
   | 'sessionTimerCard'
   | 'sessionBarChartCard'
   | 'bigAvatarZone'
@@ -205,6 +212,8 @@ export interface GameConfig {
   maxTtsQueueSize: number;
   commentGiftTtsTemplate: string;
   roseGiftTtsTemplate: string;
+  /** Câu đọc khi người chơi tặng món quà trị giá > 1 coin */
+  specialGiftTtsTemplate?: string;
   /** Câu đọc cảm ơn nhiệt tình khi người chơi gửi nhiều hoa hồng cùng lúc */
   multiRoseGiftTtsTemplate: string;
   batchGiftTtsTemplate: string;

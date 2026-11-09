@@ -42,6 +42,11 @@ const LAYOUT_ELEMENT_LABELS: {
     desc: 'Bảng hướng dẫn luật chơi với 5 màu chữ sáng',
   },
   {
+    key: 'eventQueueBoard',
+    title: 'Bảng Hàng Chờ Event Đọc (Rút Gọn)',
+    desc: 'Chỉ hiện tên người chơi / sự kiện ngắn gọn, quà đẩy lên đầu + highlight',
+  },
+  {
     key: 'headerBar',
     title: 'Tiêu đề Vòng gặp gỡ & Đồng hồ',
     desc: 'Thanh tiêu đề trên cùng màn hình',
@@ -449,7 +454,6 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
               scaleX: 1,
               scaleY: 1,
             };
-            const scaleVal = pos.scale ?? 1;
             const scaleXVal = pos.scaleX ?? 1;
             const scaleYVal = pos.scaleY ?? 1;
             const visible = visibilityMap[el.key] !== false;
@@ -471,11 +475,7 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
                     <div className="text-[10px] text-stone-400 truncate">
                       X: <strong className="text-amber-300">{pos.x}px</strong> •
                       Y: <strong className="text-amber-300">{pos.y}px</strong> •
-                      Scale:{' '}
-                      <strong className="text-emerald-300">
-                        {Math.round(scaleVal * 100)}%
-                      </strong>{' '}
-                      • Dài:{' '}
+                      Ngang:{' '}
                       <strong className="text-cyan-300">
                         {Math.round(scaleXVal * 100)}%
                       </strong>{' '}
@@ -520,30 +520,7 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
                   </div>
                 </div>
 
-                {/* Thanh trượt thu phóng đều (Góc) */}
-                <div className="flex items-center gap-2 pt-0.5">
-                  <span className="text-[10px] text-stone-400 w-16 shrink-0">
-                    Scale đều:
-                  </span>
-                  <input
-                    type="range"
-                    min={0.4}
-                    max={2.0}
-                    step={0.05}
-                    value={scaleVal}
-                    onChange={(e) =>
-                      handleUpdateElementScale(el.key, {
-                        scale: parseFloat(e.target.value),
-                      })
-                    }
-                    className="flex-1 accent-emerald-400 h-1 bg-stone-800 rounded-lg cursor-pointer"
-                  />
-                  <span className="text-[10px] font-mono font-bold text-emerald-300 w-9 text-right">
-                    {Math.round(scaleVal * 100)}%
-                  </span>
-                </div>
-
-                {/* Thanh trượt Chiều dài ngang (scaleX) & Chiều dọc (scaleY) */}
+                {/* Thanh trượt Chiều dài ngang (scaleX) & Chiều dọc (scaleY) - tự sắp xếp nội dung bên trong */}
                 <div className="grid grid-cols-2 gap-2 pt-0.5">
                   <div className="flex items-center gap-1.5">
                     <span className="text-[9.5px] text-cyan-300 shrink-0">
