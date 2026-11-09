@@ -311,6 +311,9 @@ export function useClassroomEngine() {
   const npcAvatarsRef = useRef(npcAvatars);
   npcAvatarsRef.current = npcAvatars;
 
+  const npcNamesRef = useRef(npcNames);
+  npcNamesRef.current = npcNames;
+
   const cameraFocusRef = useRef(cameraFocus);
   cameraFocusRef.current = cameraFocus;
 
@@ -320,6 +323,10 @@ export function useClassroomEngine() {
   const isSessionEndingRef = useRef<boolean>(false);
   const sessionEndTimeoutRef = useRef<number | null>(null);
   const initialRoundAnnouncedRef = useRef<boolean>(false);
+
+  // Chống nhân đôi sự kiện quà tặng / bình luận khi đồng bộ đa luồng hoặc bấm đúp
+  const processedGiftEventIdsRef = useRef<Set<string>>(new Set());
+  const recentGiftFingerprintMapRef = useRef<Map<string, number>>(new Map());
 
   // Lưu mốc thời gian nghỉ ở Map tổng giữa 2 lượt khi ở chế độ 2 (alternating_overview)
   const overviewPauseUntilRef = useRef<number>(0);
@@ -438,50 +445,51 @@ export function useClassroomEngine() {
         cfg.maxContributorsPerTile || 24
       );
 
-      setProvinces((prev) =>
-        prev.map((p) => {
-          if (p.id !== provinceId) return p;
+      const nextProvinces = provincesRef.current.map((p) => {
+        if (p.id !== provinceId) return p;
 
-          const existingMap = new Map<string, ProvinceContributor>();
-          for (const oldC of p.recentContributors) {
-            existingMap.set(oldC.username.toLowerCase(), oldC);
+        const existingMap = new Map<string, ProvinceContributor>();
+        for (const oldC of p.recentContributors) {
+          existingMap.set(oldC.username.toLowerCase(), oldC);
+        }
+
+        const newEntries: ProvinceContributor[] = [];
+        for (const sender of senders) {
+          const key = sender.username.toLowerCase();
+          const prevEntry = existingMap.get(key);
+          if (prevEntry) {
+            existingMap.delete(key);
+            newEntries.push({
+              ...sender,
+              pointsAdded: prevEntry.pointsAdded + sender.pointsAdded,
+              roseCount: (prevEntry.roseCount || 0) + (sender.roseCount || 0),
+              isRose: Boolean(prevEntry.isRose || sender.isRose),
+              timestamp: now,
+            });
+          } else {
+            newEntries.push(sender);
           }
+        }
 
-          const newEntries: ProvinceContributor[] = [];
-          for (const sender of senders) {
-            const key = sender.username.toLowerCase();
-            const prevEntry = existingMap.get(key);
-            if (prevEntry) {
-              existingMap.delete(key);
-              newEntries.push({
-                ...sender,
-                pointsAdded: prevEntry.pointsAdded + sender.pointsAdded,
-                roseCount: (prevEntry.roseCount || 0) + (sender.roseCount || 0),
-                isRose: Boolean(prevEntry.isRose || sender.isRose),
-                timestamp: now,
-              });
-            } else {
-              newEntries.push(sender);
-            }
-          }
+        const mergedContribs = [
+          ...newEntries,
+          ...Array.from(existingMap.values()),
+        ]
+          .sort((a, b) => b.pointsAdded - a.pointsAdded)
+          .slice(0, sessionContributorCap);
 
-          const mergedContribs = [
-            ...newEntries,
-            ...Array.from(existingMap.values()),
-          ]
-            .sort((a, b) => b.pointsAdded - a.pointsAdded)
-            .slice(0, sessionContributorCap);
+        return {
+          ...p,
+          points: p.points + totalPointsAdded,
+          giftCount: p.giftCount + totalGiftsAdded,
+          roseCount: p.roseCount + totalRosesAdded,
+          recentContributors: mergedContribs,
+          lastUpdatedAt: now,
+        };
+      });
 
-          return {
-            ...p,
-            points: p.points + totalPointsAdded,
-            giftCount: p.giftCount + totalGiftsAdded,
-            roseCount: p.roseCount + totalRosesAdded,
-            recentContributors: mergedContribs,
-            lastUpdatedAt: now,
-          };
-        })
-      );
+      provincesRef.current = nextProvinces;
+      setProvinces(nextProvinces);
 
       const timeStr = new Date().toLocaleTimeString('vi-VN', { hour12: false });
       const newLogs: ActivityLogItem[] = senders.map((s) => ({
@@ -525,8 +533,10 @@ export function useClassroomEngine() {
       );
 
       const anyRose = totalRosesAdded > 0 || senders.some((s) => s.isRose);
-      // NPC hỗ trợ 1 điểm (!isRose) được coi là người chơi bình thường, không đọc từ "NPC"
-      const anyNpc = senders.some((s) => Boolean(s.isNpc && s.isRose));
+      const anyFromNpc = senders.some((s) => Boolean(s.isNpc));
+      // NPC hỗ trợ 1 điểm (!isRose) được coi là người chơi bình thường về danh xưng (không đọc từ "NPC"),
+      // nhưng tuyệt đối không đọc câu chào phòng / gợi ý gửi hoa cho NPC
+      const readNpcPrefix = senders.some((s) => Boolean(s.isNpc && s.isRose));
       const uniqueNames = Array.from(new Set(senders.map((s) => s.username)));
 
       const speechText =
@@ -537,8 +547,8 @@ export function useClassroomEngine() {
               totalPointsAdded,
               totalRosesAdded,
               cfg,
-              true,
-              anyNpc
+              !anyFromNpc,
+              readNpcPrefix
             )
           : soundEngine.formatProvinceGiftSpeech(
               uniqueNames[0] || 'Người chơi',
@@ -546,8 +556,8 @@ export function useClassroomEngine() {
               totalPointsAdded,
               anyRose,
               cfg,
-              true,
-              anyNpc,
+              !anyFromNpc,
+              readNpcPrefix,
               Math.max(1, totalRosesAdded)
             );
 
@@ -558,7 +568,7 @@ export function useClassroomEngine() {
         usernamesList: uniqueNames,
         reason: anyRose ? 'gift' : 'comment',
         isRose: anyRose,
-        isNpc: anyNpc,
+        isNpc: anyFromNpc,
         pointsAdded: totalPointsAdded,
         totalRoses: totalRosesAdded,
       });
@@ -604,8 +614,8 @@ export function useClassroomEngine() {
    * 2. 'alternating_overview' (Xen kẽ zoom tổng): Sau mỗi lượt tỉnh, zoom nhanh ra Map tổng rồi mới zoom vào tỉnh mới
    * ĐẶC BIỆT:
    * - ƯU TIÊN GIỮ ZOOM TỈNH nếu Giọng đọc AI #3 vẫn còn đang đọc chưa xong sự kiện của tỉnh đó!
-   * - Mỗi lần lấy 1 tỉnh ra đọc, tự động quét toàn bộ hàng chờ `cameraQueue`,
-   *   rút TẤT CẢ những người vào cùng tỉnh đó ra đọc 1 lúc để giải phóng nhanh hàng chờ!
+   * - Với người thật: tự động quét hàng chờ `cameraQueue`, rút những người thật vào cùng tỉnh ra đọc 1 lúc.
+   * - Với NPC: mỗi lần chỉ xử lý đúng 1 NPC duy nhất (không gộp nhiều NPC làm 1 lượt).
    */
   useEffect(() => {
     const timer = setInterval(() => {
@@ -658,13 +668,15 @@ export function useClassroomEngine() {
         const headItem = queue[0];
         const targetProvId = headItem.provinceId;
 
-        // Quét toàn bộ hàng chờ để gom TẤT CẢ các mục có cùng `provinceId` đọc 1 lần!
-        const sameProvinceItems = queue.filter(
-          (item) => item.provinceId === targetProvId
-        );
-        const remainingQueue = queue.filter(
-          (item) => item.provinceId !== targetProvId
-        );
+        // Nếu mục đầu là NPC -> mỗi chu kỳ NPC chỉ chạy đúng 1 người duy nhất!
+        // Nếu là người chơi thật -> gom các mục người chơi thật có cùng `provinceId`
+        const sameProvinceItems = headItem.isNpc
+          ? [headItem]
+          : queue.filter(
+              (item) => item.provinceId === targetProvId && !item.isNpc
+            );
+        const pickedIds = new Set(sameProvinceItems.map((item) => item.id));
+        const remainingQueue = queue.filter((item) => !pickedIds.has(item.id));
 
         cameraQueueRef.current = remainingQueue;
         setCameraQueue(remainingQueue);
@@ -689,7 +701,7 @@ export function useClassroomEngine() {
           new Set(mergedSenders.map((s) => s.username))
         );
 
-        // Cộng điểm, lưu Avatar vào tỉnh và đọc 1 lúc tất cả tên người chơi của tỉnh này
+        // Cộng điểm, lưu Avatar vào tỉnh và đọc tên người chơi của tỉnh này
         commitGiftTurnToProvinceAndTTS(
           targetProvId,
           headItem.provinceName,
@@ -903,12 +915,13 @@ export function useClassroomEngine() {
   /**
    * Hàm trung tâm xử lý khi người chơi bình luận đến tỉnh (+1đ) hoặc gửi hoa hồng (+5đ)
    * - Trong mỗi phiên: người chơi chỉ được bình luận 1 lần để +1 điểm (nhưng có thể tặng nhiều hoa hồng & nhiều điểm không giới hạn!)
-   * - Khi đang chờ trong `cameraQueue`, nếu có người mới vào cùng tỉnh -> gom tất cả vào chung 1 mục của tỉnh đó
-   *   để khi tới lượt sẽ đọc 1 lúc tất cả các tên cho hết nhanh hàng chờ!
+   * - Khi đang chờ trong `cameraQueue`, nếu có người thật mới vào cùng tỉnh -> gom người thật vào chung 1 mục của tỉnh đó
+   * - Với NPC: mỗi chu kỳ chỉ 1 người, không gộp chung nhiều NPC!
    */
   const executeProvinceGift = useCallback(
     (
       payload: {
+        eventId?: string;
         provinceId: string;
         username: string;
         avatarUrl?: string | null;
@@ -929,8 +942,39 @@ export function useClassroomEngine() {
       const cleanUser = (payload.username || 'Người Chơi').trim();
       const userKey = cleanUser.toLowerCase();
       const isFromNpc = Boolean(payload.isNpc);
-      // NPC hỗ trợ 1 điểm (!isRose) coi như người chơi bình thường, không gắn cờ isNpc để không đọc từ "NPC"
-      const isNpcSender = Boolean(payload.isNpc && payload.isRose);
+      const now = Date.now();
+
+      // 1. Chống thực thi trùng lặp theo eventId
+      const eventId =
+        payload.eventId ||
+        `gift_${now}_${Math.random().toString(36).slice(2, 8)}`;
+      if (processedGiftEventIdsRef.current.has(eventId)) {
+        return { ok: false, reason: 'duplicate_event_id' };
+      }
+      processedGiftEventIdsRef.current.add(eventId);
+      if (processedGiftEventIdsRef.current.size > 300) {
+        const firstKey = processedGiftEventIdsRef.current.values().next().value;
+        if (firstKey) processedGiftEventIdsRef.current.delete(firstKey);
+      }
+
+      const roseCount = payload.isRose
+        ? Math.max(1, payload.roseCountOverride || 1)
+        : 0;
+      const pointsAdded =
+        payload.pointsOverride !== undefined
+          ? Math.max(1, payload.pointsOverride)
+          : payload.isRose
+          ? Math.max(1, (cfg.rosePoints || 5) * roseCount)
+          : Math.max(1, cfg.commentPoints || 1);
+
+      // 2. Chống bị bắn đúp cùng 1 gói quà / bình luận trong khoảng < 320ms
+      const fingerprint = `${userKey}:${targetProv.id}:${payload.isRose ? 'R' : 'C'}:${pointsAdded}:${roseCount}:${isFromNpc ? 'N' : 'U'}`;
+      const lastExecAt =
+        recentGiftFingerprintMapRef.current.get(fingerprint) || 0;
+      if (now - lastExecAt < 320) {
+        return { ok: false, reason: 'duplicate_gift_throttled' };
+      }
+      recentGiftFingerprintMapRef.current.set(fingerprint, now);
 
       // Luôn ghi nhớ tỉnh người chơi chọn để khi họ tặng hoa hồng sẽ cộng về đúng tỉnh đó
       userProvinceMemoryRef.current.set(userKey, targetProv.id);
@@ -949,16 +993,6 @@ export function useClassroomEngine() {
         sessionCommentedUsersRef.current.add(userKey);
       }
 
-      const roseCount = payload.isRose
-        ? Math.max(1, payload.roseCountOverride || 1)
-        : 0;
-      const pointsAdded =
-        payload.pointsOverride !== undefined
-          ? Math.max(1, payload.pointsOverride)
-          : payload.isRose
-          ? Math.max(1, (cfg.rosePoints || 5) * roseCount)
-          : Math.max(1, cfg.commentPoints || 1);
-
       const avatarColor = pickColorForUser(cleanUser);
       const rememberedAvatar = userAvatarMemoryRef.current.get(userKey);
       const avatarUrl = resolveAvatarForUsername(
@@ -967,7 +1001,6 @@ export function useClassroomEngine() {
         npcAvatarsRef.current
       );
       userAvatarMemoryRef.current.set(userKey, avatarUrl);
-      const now = Date.now();
 
       const contributor: ProvinceContributor = {
         id: `contrib_${now}_${Math.random().toString(36).slice(2, 6)}`,
@@ -976,7 +1009,7 @@ export function useClassroomEngine() {
         avatarColor,
         pointsAdded,
         isRose: payload.isRose,
-        isNpc: isNpcSender,
+        isNpc: isFromNpc,
         roseCount,
         timestamp: now,
       };
@@ -990,19 +1023,21 @@ export function useClassroomEngine() {
         avatarColor,
         pointsAdded,
         isRose: payload.isRose,
-        isNpc: isNpcSender,
+        isNpc: isFromNpc,
         addedAt: now,
         senders: [contributor],
         totalRoses: roseCount,
         totalGifts: 1,
       };
 
-      // Hàm phụ trợ: Đưa vào hàng chờ Camera và TỰ ĐỘNG GOM TẤT CẢ NGƯỜI CÙNG TỈNH vào 1 lượt
-      // (Nếu cùng 1 người vừa comment +1đ vừa tặng hoa thì cộng dồn vào 1 avatar duy nhất!)
+      // Hàm phụ trợ: Đưa vào hàng chờ Camera đồng bộ qua `cameraQueueRef.current`
+      // (Tránh lỗi stale state của setCameraQueue làm phục hồi lại mục vừa lấy ra gây double quà!)
+      // Nếu là NPC: luôn xếp thành 1 mục độc lập (1 người / lần), không gộp với mục khác!
       const enqueueAndMergeSameProvince = () => {
-        setCameraQueue((prev) => {
+        const prev = cameraQueueRef.current;
+        if (!isFromNpc) {
           const existingIdx = prev.findIndex(
-            (q) => q.provinceId === targetProv.id
+            (q) => q.provinceId === targetProv.id && !q.isNpc
           );
           if (existingIdx !== -1) {
             const next = [...prev];
@@ -1018,23 +1053,37 @@ export function useClassroomEngine() {
               username: uniqueNames.join(', '),
               pointsAdded: targetItem.pointsAdded + pointsAdded,
               isRose: targetItem.isRose || payload.isRose,
-              isNpc: Boolean(targetItem.isNpc || isNpcSender),
+              isNpc: false,
               senders: mergedSenders,
               totalRoses: targetItem.totalRoses + roseCount,
               totalGifts: targetItem.totalGifts + 1,
             };
             cameraQueueRef.current = next;
-            return next;
+            setCameraQueue(next);
+            return;
           }
-          const appended = [...prev.slice(-40), singleQueueItem];
-          cameraQueueRef.current = appended;
-          return appended;
-        });
+        }
+        const appended = [...prev.slice(-40), singleQueueItem];
+        cameraQueueRef.current = appended;
+        setCameraQueue(appended);
       };
 
       // Nếu đang trong luồng tổng kết cuối phiên -> Đẩy toàn bộ quà phát sinh vào hàng chờ cho phiên sau!
       if (isSessionEndingRef.current) {
         enqueueAndMergeSameProvince();
+        if (broadcastSync) {
+          syncService.sendCommand('SEND_PROVINCE_GIFT', {
+            eventId,
+            provinceId: targetProv.id,
+            username: cleanUser,
+            avatarUrl,
+            isRose: payload.isRose,
+            isNpc: isFromNpc,
+            pointsOverride: pointsAdded,
+            roseCountOverride: roseCount,
+            bypassCommentLimit: true,
+          });
+        }
         return { ok: true };
       }
 
@@ -1047,9 +1096,15 @@ export function useClassroomEngine() {
           (now < curFocus.until ||
             soundEngine.isSpeakingOrQueuedForProvince(curFocus.provinceId!));
 
-        // Trường hợp 1: Camera ĐANG đứng ở đúng tỉnh này (ví dụ người chơi vừa comment +1đ và tặng hoa ngay tiếp theo)
-        // -> Cộng dồn thẳng vào 1 Avatar duy nhất của người chơi đó, KHÔNG tạo thêm avatar thứ 2 và KHÔNG làm avatar to nhảy lại lần 2!
+        const activeFocusHasNpc = Boolean(
+          curFocus.senders?.some((s) => Boolean(s.isNpc))
+        );
+
+        // Trường hợp 1: Camera ĐANG đứng ở đúng tỉnh này (chỉ gộp đối với người chơi thật, ví dụ vừa comment +1đ và tặng hoa ngay tiếp theo)
+        // Không gộp nếu là NPC để đảm bảo mỗi lần NPC chỉ xuất hiện đúng 1 người độc lập!
         if (
+          !isFromNpc &&
+          !activeFocusHasNpc &&
           curFocus.provinceId === targetProv.id &&
           (curProvinceStillActive || cameraQueueRef.current.length === 0)
         ) {
@@ -1143,7 +1198,7 @@ export function useClassroomEngine() {
             });
           }, 120);
         } else {
-          // Trường hợp 3: Đưa vào hàng chờ Camera & tự động gộp tất cả người cùng tỉnh để khi tới lượt đọc 1 lần hết sạch!
+          // Trường hợp 3: Đưa vào hàng chờ Camera
           enqueueAndMergeSameProvince();
         }
       } else {
@@ -1164,11 +1219,12 @@ export function useClassroomEngine() {
 
       if (broadcastSync) {
         syncService.sendCommand('SEND_PROVINCE_GIFT', {
+          eventId,
           provinceId: targetProv.id,
           username: cleanUser,
           avatarUrl,
           isRose: payload.isRose,
-          isNpc: isNpcSender,
+          isNpc: isFromNpc,
           pointsOverride: pointsAdded,
           roseCountOverride: roseCount,
           bypassCommentLimit: true,
@@ -1294,6 +1350,9 @@ export function useClassroomEngine() {
     });
 
     const unsubTikTok = syncService.onTikTokEvent((ev) => {
+      // Nếu đang ở màn hình Live (OBS Slave), nhận lệnh đồng bộ từ Studio Master qua SEND_PROVINCE_GIFT để tránh chạy đúp 2 lần
+      if (isObsView) return;
+
       if (ev.type === 'chat' && ev.comment) {
         handleUserComment(
           ev.username,
@@ -1309,8 +1368,16 @@ export function useClassroomEngine() {
           ev.avatarUrl || ev.profilePictureUrl || null
         );
       } else if (ev.type === 'member') {
+        const rawUser = (ev.username || '').trim();
+        if (!rawUser) return;
+        const isMatchesNpcName = npcNamesRef.current.some(
+          (n) => n.trim().toLowerCase() === rawUser.toLowerCase()
+        );
+        if (isMatchesNpcName || /^npc\s+/i.test(rawUser)) {
+          return;
+        }
         const inspection = inspectUserInteraction(
-          ev.username || 'Bạn mới',
+          rawUser,
           '',
           safetyActionMode,
           safetyCategories,
@@ -1319,7 +1386,8 @@ export function useClassroomEngine() {
         if (inspection.allowed) {
           soundEngine.enqueueWelcomeJoin(
             inspection.safeUsername,
-            configRef.current
+            configRef.current,
+            false
           );
         }
       }
@@ -1330,6 +1398,7 @@ export function useClassroomEngine() {
       if (action === 'SEND_PROVINCE_GIFT') {
         executeProvinceGift(
           {
+            eventId: payload.eventId,
             provinceId: payload.provinceId,
             username: payload.username,
             avatarUrl: payload.avatarUrl,
@@ -1430,9 +1499,11 @@ export function useClassroomEngine() {
     safetyCategories,
   ]);
 
-  // Giả lập NPC tự động hỗ trợ điểm tỉnh với chu kỳ cộng trừ ngẫu nhiên ±1..2s để tạo độ tự nhiên
+  // Giả lập NPC tự động hỗ trợ điểm tỉnh:
+  // - Chỉ chạy duy nhất trên Studio Master (!isObsView) để không bị sinh đúp 2 NPC từ 2 tab
+  // - Mỗi chu kỳ chỉ kích hoạt đúng 1 NPC duy nhất
   useEffect(() => {
-    if (!config.npcAutoEnabled) return;
+    if (!config.npcAutoEnabled || isObsView) return;
     let cancelled = false;
     let timeoutId: number | null = null;
 
@@ -1449,13 +1520,18 @@ export function useClassroomEngine() {
 
       timeoutId = window.setTimeout(() => {
         if (cancelled) return;
-        if (!isSessionEndingRef.current) {
+        if (!isSessionEndingRef.current && configRef.current.npcAutoEnabled) {
           const list = provincesRef.current;
           if (list.length > 0) {
             const randomProv = list[Math.floor(Math.random() * list.length)];
-            const names = npcNames.length > 0 ? npcNames : SAMPLE_NAMES;
+            const names =
+              npcNamesRef.current.length > 0
+                ? npcNamesRef.current
+                : SAMPLE_NAMES;
             const avatars =
-              npcAvatars.length > 0 ? npcAvatars : DEFAULT_NPC_AVATARS;
+              npcAvatarsRef.current.length > 0
+                ? npcAvatarsRef.current
+                : DEFAULT_NPC_AVATARS;
             const randomName = names[Math.floor(Math.random() * names.length)];
             const randomAvatar =
               avatars[Math.floor(Math.random() * avatars.length)];
@@ -1487,14 +1563,7 @@ export function useClassroomEngine() {
         window.clearTimeout(timeoutId);
       }
     };
-  }, [
-    config.npcAutoEnabled,
-    config.npcIntervalSec,
-    config.npcRoseChancePercent,
-    executeProvinceGift,
-    npcAvatars,
-    npcNames,
-  ]);
+  }, [config.npcAutoEnabled, executeProvinceGift, isObsView]);
 
   const handleUpdateConfig = useCallback((patch: Partial<GameConfig>) => {
     setConfig((prev) => {

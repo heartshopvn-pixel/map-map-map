@@ -1196,9 +1196,12 @@ class SoundService {
   public enqueueWelcomeJoin(
     username: string,
     config: GameConfig,
-    force = false
+    force = false,
+    isNpc = false
   ): boolean {
     this.latestConfig = config;
+    if (isNpc) return false;
+    if (/^npc\s+/i.test((username || '').trim())) return false;
     if (!config.ttsEnabled) return false;
     if (!force && config.welcomeJoinEnabled === false) return false;
 
@@ -1513,7 +1516,8 @@ class SoundService {
       .replace(/\s+/g, ' ')
       .trim();
 
-    if (includeRandomPhrase) {
+    // Chào vào phòng / câu chào ngẫu nhiên chỉ áp dụng cho người thật, không áp dụng cho NPC
+    if (includeRandomPhrase && !isNpc) {
       const rosePrompt = !isMultiRose
         ? this.pickRosePromptSuffix(cleanUsername, cleanProvince, config)
         : '';
@@ -1596,7 +1600,8 @@ class SoundService {
         .trim();
     }
 
-    if (includeRandomPhrase) {
+    // Chào vào phòng / câu chào ngẫu nhiên chỉ áp dụng cho người thật, không áp dụng cho NPC
+    if (includeRandomPhrase && !isNpc) {
       const rosePrompt =
         totalRoses === 0
           ? this.pickRosePromptSuffix(namesJoined, cleanProvince, config)
@@ -1640,8 +1645,9 @@ class SoundService {
 
     const now = Date.now();
 
-    // Nếu tỉnh này đã có mục đang chờ trong hàng đợi TTS -> Gom gộp tất cả tên người chơi vào đọc chung 1 lần!
-    if (meta?.provinceId && meta?.provinceName) {
+    // Nếu tỉnh này đã có mục đang chờ trong hàng đợi TTS (của người chơi thật) -> Gom gộp tất cả tên người chơi vào đọc chung 1 lần!
+    // (Không gom gộp NPC tự động để chu kỳ NPC luôn chỉ 1 người mỗi lần)
+    if (meta?.provinceId && meta?.provinceName && !meta.isNpc) {
       const incomingNames =
         meta.usernamesList && meta.usernamesList.length > 0
           ? meta.usernamesList
@@ -1650,7 +1656,10 @@ class SoundService {
           : [];
 
       const existingIdx = this.ttsQueue.findIndex(
-        (q) => !q.isTurboBatch && q.meta?.provinceId === meta.provinceId
+        (q) =>
+          !q.isTurboBatch &&
+          !q.meta?.isNpc &&
+          q.meta?.provinceId === meta.provinceId
       );
 
       if (existingIdx !== -1 && incomingNames.length > 0) {
@@ -1674,7 +1683,7 @@ class SoundService {
           nextPoints,
           nextRoses,
           config,
-          true,
+          !mergedIsNpc,
           mergedIsNpc
         );
 

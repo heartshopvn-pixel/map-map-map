@@ -123,11 +123,18 @@ class LiveSyncService {
   }) {
     const now = Date.now();
     for (const [k, t] of this.recentTikTokEventKeys.entries()) {
-      if (now - t > 450) this.recentTikTokEventKeys.delete(k);
+      if (now - t > 3000) this.recentTikTokEventKeys.delete(k);
     }
-    const dedupKey = `${ev.type}:${ev.username}:${ev.comment || ev.giftName || ev.likeCount || ''}`;
+    const normalizedGiftOrComment = (
+      ev.comment ||
+      ev.giftName ||
+      String(ev.likeCount || '')
+    )
+      .trim()
+      .toLowerCase();
+    const dedupKey = `${ev.type}:${(ev.username || '').trim().toLowerCase()}:${normalizedGiftOrComment}:${ev.coins || 0}:${ev.repeatCount || ev.comboCount || 0}`;
     const prevAt = this.recentTikTokEventKeys.get(dedupKey);
-    if (prevAt && now - prevAt < 350) {
+    if (prevAt && now - prevAt < 2200) {
       return;
     }
     this.recentTikTokEventKeys.set(dedupKey, now);
@@ -721,6 +728,14 @@ class LiveSyncService {
       this.ws = socket;
 
       socket.onopen = () => {
+        if (this.localSseFallback) {
+          try {
+            this.localSseFallback.close();
+          } catch {
+            // Ignore
+          }
+          this.localSseFallback = null;
+        }
         this.setStatus('connected');
         this.appendTikTokLog(`🔌 Đã kết nối WebSocket: ${this.lastWsUrl}`);
         // Khi kết nối WebSocket thành công, nếu đây là màn hình Live (?obs=1) thì lập tức xin đồng bộ toàn bộ vị trí bảng & cấu hình từ Chrome

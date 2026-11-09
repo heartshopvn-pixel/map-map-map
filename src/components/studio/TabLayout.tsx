@@ -382,13 +382,13 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
           <Move className="w-4 h-4" />
           <span>
             {config.layoutEditMode
-              ? 'ĐANG BẬT CHỈNH LAYOUT (Kéo góc ⤡ scale đều • Kéo cạnh ↔/↕ chỉnh dài/dọc)'
-              : 'BẬT CHỈNH LAYOUT (Kéo thả • Bấm góc scale • Bấm cạnh chỉnh dài/dọc)'}
+              ? 'ĐANG BẬT CHỈNH LAYOUT (Kéo góc ⤡ cỡ đều • Kéo cạnh ↔/↕ tự sắp xếp nội dung)'
+              : 'BẬT CHỈNH LAYOUT (Kéo thả • Bấm góc cỡ đều • Bấm cạnh ↔/↕ sắp xếp nội dung)'}
           </span>
         </button>
 
         <p className="text-[10.5px] text-stone-400 leading-relaxed">
-          Khi bật chỉnh Layout, mỗi bảng có <strong>4 chấm tròn xanh lá ở 4 góc (⤡)</strong> để thu phóng đều và <strong>4 thanh xanh lam ở 4 cạnh (↔ / ↕)</strong> để kéo chỉnh <strong>chiều dài ngang / chiều dọc</strong> riêng biệt.
+          Khi bật chỉnh Layout, mỗi bảng có <strong>4 chấm tròn xanh lá ở 4 góc (⤡)</strong> để thu phóng đều và <strong>4 thanh xanh lam ở 4 cạnh (↔ / ↕)</strong> để đổi <strong>kích thước khung ngang / dọc</strong> (các nội dung bên trong sẽ tự động sắp xếp lại theo kích thước khung, không bị kéo méo chữ).
         </p>
 
         {/* Tùy chỉnh tiêu đề Danh sách tỉnh đạt Top 1 nhiều nhất */}

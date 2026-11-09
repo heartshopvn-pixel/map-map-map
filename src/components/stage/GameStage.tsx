@@ -71,16 +71,27 @@ function isImageSource(val: string | undefined | null): boolean {
   );
 }
 
+interface DraggableBoxRenderContext {
+  scaleX: number;
+  scaleY: number;
+  widthPx: number;
+  minHeightPx: number;
+}
+
 interface DraggableBoxProps {
   elementKey: LayoutElementKey;
   label: string;
   config: GameConfig;
   scaleFactor: number;
+  baseWidthPx: number;
+  baseHeightPx: number;
   transformOrigin?: string;
   baseClassName?: string;
   baseStyle?: React.CSSProperties;
   onUpdateConfig?: (patch: Partial<GameConfig>) => void;
-  children: React.ReactNode;
+  children:
+    | React.ReactNode
+    | ((ctx: DraggableBoxRenderContext) => React.ReactNode);
 }
 
 const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
@@ -88,6 +99,8 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
   label,
   config,
   scaleFactor,
+  baseWidthPx,
+  baseHeightPx,
   transformOrigin = 'top left',
   baseClassName = '',
   baseStyle = {},
@@ -107,6 +120,15 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
   const currentScale = Math.max(0.35, Math.min(2.5, pos.scale ?? 1));
   const currentScaleX = Math.max(0.35, Math.min(3.0, pos.scaleX ?? 1));
   const currentScaleY = Math.max(0.35, Math.min(3.0, pos.scaleY ?? 1));
+
+  const computedWidthPx = Math.max(
+    90,
+    Math.round(baseWidthPx * currentScaleX)
+  );
+  const computedMinHeightPx = Math.max(
+    36,
+    Math.round(baseHeightPx * currentScaleY)
+  );
 
   const dragStartRef = useRef<{
     mode: 'move' | 'resize' | 'resize_x' | 'resize_y';
@@ -225,7 +247,7 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
         ((e.clientX - dragStartRef.current.pointerX) *
           dragStartRef.current.dirSign) /
         (scaleFactor || 1);
-      const deltaX = dx / 140;
+      const deltaX = dx / Math.max(110, baseWidthPx * 0.75);
       const nextScaleX = Number(
         Math.max(
           0.35,
@@ -250,7 +272,7 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
         ((e.clientY - dragStartRef.current.pointerY) *
           dragStartRef.current.dirSign) /
         (scaleFactor || 1);
-      const deltaY = dy / 140;
+      const deltaY = dy / Math.max(80, baseHeightPx * 0.85);
       const nextScaleY = Number(
         Math.max(
           0.35,
@@ -314,8 +336,12 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
     setInteractionMode('idle');
   };
 
-  const finalScaleX = Number((currentScale * currentScaleX).toFixed(3));
-  const finalScaleY = Number((currentScale * currentScaleY).toFixed(3));
+  const renderContext: DraggableBoxRenderContext = {
+    scaleX: currentScaleX,
+    scaleY: currentScaleY,
+    widthPx: computedWidthPx,
+    minHeightPx: computedMinHeightPx,
+  };
 
   return (
     <div
@@ -329,8 +355,11 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
       }`}
       style={{
         ...baseStyle,
+        width: `${computedWidthPx}px`,
+        minHeight: `${computedMinHeightPx}px`,
         transformOrigin,
-        transform: `translate3d(${pos.x}px, ${pos.y}px, 0px) scale(${finalScaleX}, ${finalScaleY})`,
+        // Chỉ dùng currentScale (tỉ lệ đều) cho transform để chữ/icon không bị méo khi kéo ngang/dọc
+        transform: `translate3d(${pos.x}px, ${pos.y}px, 0px) scale(${currentScale})`,
       }}
     >
       {config.layoutEditMode && (
@@ -342,67 +371,66 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
                 : 'bg-amber-400 text-stone-950'
             }`}
           >
-            ✥ {label} • {Math.round(currentScale * 100)}% (W:
-            {Math.round(currentScaleX * 100)}% H:
-            {Math.round(currentScaleY * 100)}%)
+            ✥ {label} • Cỡ {Math.round(currentScale * 100)}% ({computedWidthPx}×
+            {computedMinHeightPx}px)
           </div>
 
           {/* 4 Nút kéo ở 4 Góc (Scale đều) */}
           <div
             onPointerDown={(e) => handleResizePointerDown(-1, -1, e)}
-            title="Kéo góc để chỉnh kích thước đều"
+            title="Kéo góc để phóng to/thu nhỏ đều"
             className="absolute -top-2 -left-2 z-50 w-4 h-4 rounded-full bg-emerald-400 border-2 border-stone-950 cursor-nwse-resize shadow-md"
           />
           <div
             onPointerDown={(e) => handleResizePointerDown(1, -1, e)}
-            title="Kéo góc để chỉnh kích thước đều"
+            title="Kéo góc để phóng to/thu nhỏ đều"
             className="absolute -top-2 -right-2 z-50 w-4 h-4 rounded-full bg-emerald-400 border-2 border-stone-950 cursor-nesw-resize shadow-md"
           />
           <div
             onPointerDown={(e) => handleResizePointerDown(-1, 1, e)}
-            title="Kéo góc để chỉnh kích thước đều"
+            title="Kéo góc để phóng to/thu nhỏ đều"
             className="absolute -bottom-2 -left-2 z-50 w-4 h-4 rounded-full bg-emerald-400 border-2 border-stone-950 cursor-nesw-resize shadow-md"
           />
           <div
             onPointerDown={(e) => handleResizePointerDown(1, 1, e)}
-            title="Kéo góc để chỉnh kích thước (Scale nội dung)"
+            title="Kéo góc để phóng to/thu nhỏ đều"
             className="absolute -bottom-2.5 -right-2.5 z-50 w-5 h-5 rounded-full bg-emerald-400 border-2 border-stone-950 cursor-nwse-resize shadow-lg flex items-center justify-center text-[9px] font-black text-stone-950"
           >
             ⤡
           </div>
 
-          {/* 4 Thanh kéo ở 4 Cạnh (Kéo dài ngang / dọc riêng biệt) */}
+          {/* 4 Thanh kéo ở 4 Cạnh (Thay đổi kích thước khung ngang / dọc, tự sắp xếp nội dung bên trong) */}
           <div
             onPointerDown={(e) => handleEdgeResizePointerDown('x', 1, e)}
-            title="Kéo cạnh phải để chỉnh chiều dài ngang"
+            title="Kéo cạnh phải để chỉnh chiều rộng khung (tự sắp xếp nội dung)"
             className="absolute top-1/2 -right-2 -translate-y-1/2 z-50 w-3 h-7 rounded-full bg-cyan-400 border border-stone-950 cursor-ew-resize shadow flex items-center justify-center text-[8px] font-black text-stone-950"
           >
             ↔
           </div>
           <div
             onPointerDown={(e) => handleEdgeResizePointerDown('x', -1, e)}
-            title="Kéo cạnh trái để chỉnh chiều dài ngang"
+            title="Kéo cạnh trái để chỉnh chiều rộng khung (tự sắp xếp nội dung)"
             className="absolute top-1/2 -left-2 -translate-y-1/2 z-50 w-3 h-7 rounded-full bg-cyan-400 border border-stone-950 cursor-ew-resize shadow flex items-center justify-center text-[8px] font-black text-stone-950"
           >
             ↔
           </div>
           <div
             onPointerDown={(e) => handleEdgeResizePointerDown('y', 1, e)}
-            title="Kéo cạnh dưới để chỉnh chiều dọc"
+            title="Kéo cạnh dưới để chỉnh chiều cao khung (tự sắp xếp nội dung)"
             className="absolute -bottom-2 left-1/2 -translate-x-1/2 z-50 w-7 h-3 rounded-full bg-cyan-400 border border-stone-950 cursor-ns-resize shadow flex items-center justify-center text-[8px] font-black text-stone-950"
           >
             ↕
           </div>
           <div
             onPointerDown={(e) => handleEdgeResizePointerDown('y', -1, e)}
-            title="Kéo cạnh trên để chỉnh chiều dọc"
+            title="Kéo cạnh trên để chỉnh chiều cao khung (tự sắp xếp nội dung)"
             className="absolute -top-2 left-1/2 -translate-x-1/2 z-50 w-7 h-3 rounded-full bg-cyan-400 border border-stone-950 cursor-ns-resize shadow flex items-center justify-center text-[8px] font-black text-stone-950"
           >
             ↕
           </div>
         </>
       )}
-      {children}
+      {typeof children === 'function' ? children(renderContext) : children}
     </div>
   );
 };
@@ -1447,88 +1475,95 @@ export const GameStage: React.FC<GameStageProps> = ({
                 label="Vị trí Avatar To (Phải ➔ Trái)"
                 config={config}
                 scaleFactor={stageScale}
+                baseWidthPx={396}
+                baseHeightPx={112}
                 transformOrigin="bottom right"
                 onUpdateConfig={onUpdateConfig}
-                baseClassName="absolute right-4 bottom-[242px] z-30 flex flex-col items-end"
+                baseClassName="absolute right-4 bottom-[242px] z-30 flex flex-col items-end justify-center"
               >
-                <div className="flex flex-row-reverse items-center justify-start gap-4 px-1">
-                  {(activeBatchedSenders.length > 0
-                    ? activeBatchedSenders.slice(0, 4)
-                    : [
-                        {
-                          id: 'demo_1',
-                          username: 'Người Chơi 1',
-                          avatarUrl: npcAvatars[0] || DEFAULT_NPC_AVATARS[0],
-                          avatarColor: '#10b981',
-                          pointsAdded: 5,
-                          isRose: true,
-                          timestamp: 0,
-                        },
-                        {
-                          id: 'demo_2',
-                          username: 'Người Chơi 2',
-                          avatarUrl: npcAvatars[1] || DEFAULT_NPC_AVATARS[1],
-                          avatarColor: '#f59e0b',
-                          pointsAdded: 5,
-                          isRose: true,
-                          timestamp: 0,
-                        },
-                      ]
-                  ).map((sender) => {
-                    const resolvedUrl = resolveAvatarForUsername(
-                      sender.username,
-                      sender.avatarUrl,
-                      npcAvatars
-                    );
-                    return (
-                      <div
-                        key={`${
-                          cameraFocus.provinceId || 'demo'
-                        }_${sender.username.toLowerCase()}`}
-                        className="flex flex-col items-center province-avatar-throw"
-                      >
+                {({ minHeightPx }) => (
+                  <div
+                    style={{ minHeight: `${minHeightPx}px` }}
+                    className="w-full flex flex-row-reverse flex-wrap items-center justify-start content-center gap-3.5 px-1 py-1"
+                  >
+                    {(activeBatchedSenders.length > 0
+                      ? activeBatchedSenders.slice(0, 6)
+                      : [
+                          {
+                            id: 'demo_1',
+                            username: 'Người Chơi 1',
+                            avatarUrl: npcAvatars[0] || DEFAULT_NPC_AVATARS[0],
+                            avatarColor: '#10b981',
+                            pointsAdded: 5,
+                            isRose: true,
+                            timestamp: 0,
+                          },
+                          {
+                            id: 'demo_2',
+                            username: 'Người Chơi 2',
+                            avatarUrl: npcAvatars[1] || DEFAULT_NPC_AVATARS[1],
+                            avatarColor: '#f59e0b',
+                            pointsAdded: 5,
+                            isRose: true,
+                            timestamp: 0,
+                          },
+                        ]
+                    ).map((sender) => {
+                      const resolvedUrl = resolveAvatarForUsername(
+                        sender.username,
+                        sender.avatarUrl,
+                        npcAvatars
+                      );
+                      return (
                         <div
-                          className="relative w-[80px] h-[80px] rounded-full p-[3px] shadow-[0_6px_24px_rgba(0,0,0,0.65)]"
-                          style={{
-                            background:
-                              'linear-gradient(135deg, #f6e7a4 0%, #c8a24b 50%, #f3df8d 100%)',
-                          }}
+                          key={`${
+                            cameraFocus.provinceId || 'demo'
+                          }_${sender.username.toLowerCase()}`}
+                          className="flex flex-col items-center province-avatar-throw"
                         >
                           <div
-                            className="w-full h-full rounded-full overflow-hidden border-2 border-[#102a30] flex items-center justify-center bg-stone-900"
-                            style={{ backgroundColor: sender.avatarColor }}
+                            className="relative w-[80px] h-[80px] rounded-full p-[3px] shadow-[0_6px_24px_rgba(0,0,0,0.65)]"
+                            style={{
+                              background:
+                                'linear-gradient(135deg, #f6e7a4 0%, #c8a24b 50%, #f3df8d 100%)',
+                            }}
                           >
-                            <img
-                              src={resolvedUrl}
-                              alt={sender.username}
-                              referrerPolicy="no-referrer"
-                              onError={(e) => {
-                                (e.currentTarget as HTMLImageElement).src =
-                                  `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(
-                                    sender.username || 'Player'
-                                  )}`;
-                              }}
-                              className="w-full h-full object-cover"
-                            />
+                            <div
+                              className="w-full h-full rounded-full overflow-hidden border-2 border-[#102a30] flex items-center justify-center bg-stone-900"
+                              style={{ backgroundColor: sender.avatarColor }}
+                            >
+                              <img
+                                src={resolvedUrl}
+                                alt={sender.username}
+                                referrerPolicy="no-referrer"
+                                onError={(e) => {
+                                  (e.currentTarget as HTMLImageElement).src =
+                                    `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(
+                                      sender.username || 'Player'
+                                    )}`;
+                                }}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                            {sender.pointsAdded > 0 && (
+                              <span className="absolute -bottom-1 right-0 px-1.5 py-0.5 rounded-full bg-[#FF6F61] border border-white text-[10px] font-mono font-black text-white leading-none shadow">
+                                +{sender.pointsAdded}đ
+                              </span>
+                            )}
                           </div>
-                          {sender.pointsAdded > 0 && (
-                            <span className="absolute -bottom-1 right-0 px-1.5 py-0.5 rounded-full bg-[#FF6F61] border border-white text-[10px] font-mono font-black text-white leading-none shadow">
-                              +{sender.pointsAdded}đ
-                            </span>
-                          )}
+                          <span
+                            className="mt-1.5 text-xs font-extrabold text-white max-w-[105px] truncate text-center"
+                            style={{
+                              textShadow: '0 2px 4px rgba(0,0,0,0.9)',
+                            }}
+                          >
+                            {sender.username}
+                          </span>
                         </div>
-                        <span
-                          className="mt-1.5 text-xs font-extrabold text-white max-w-[105px] truncate text-center"
-                          style={{
-                            textShadow: '0 2px 4px rgba(0,0,0,0.9)',
-                          }}
-                        >
-                          {sender.username}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                )}
               </DraggableLayoutBox>
             )}
 
@@ -1544,81 +1579,94 @@ export const GameStage: React.FC<GameStageProps> = ({
                 label="Banner Bình Luận & Quà"
                 config={config}
                 scaleFactor={stageScale}
+                baseWidthPx={255}
+                baseHeightPx={52}
                 transformOrigin="bottom left"
                 onUpdateConfig={onUpdateConfig}
                 baseClassName="absolute left-4 bottom-[225px] z-30"
               >
-                <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-[#091f26]/90 border border-teal-800/60 backdrop-blur-md shadow-xl">
+                {({ minHeightPx }) => (
                   <div
-                    className="w-9 h-9 rounded-full overflow-hidden border border-amber-300/80 shrink-0 flex items-center justify-center bg-stone-900"
-                    style={{
-                      backgroundColor:
-                        latestSender?.avatarColor ||
-                        thrownAvatars[0]?.avatarColor ||
-                        '#f59e0b',
-                    }}
+                    style={{ minHeight: `${minHeightPx}px` }}
+                    className="w-full flex flex-wrap items-center justify-between content-center gap-2 px-3 py-1.5 rounded-2xl bg-[#091f26]/90 border border-teal-800/60 backdrop-blur-md shadow-xl"
                   >
-                    <img
-                      src={resolveAvatarForUsername(
-                        latestSender?.username ||
-                          thrownAvatars[0]?.username ||
-                          'Người Chơi',
-                        latestSender?.avatarUrl || thrownAvatars[0]?.avatarUrl,
-                        npcAvatars
-                      )}
-                      alt="sender"
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src =
-                          DEFAULT_NPC_AVATARS[0];
-                      }}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <div className="pr-1">
-                    <div className="text-xs font-extrabold text-white max-w-[115px] truncate leading-tight">
-                      {activeBatchedSenders.length > 1
-                        ? `${activeBatchedSenders.length} người chơi`
-                        : latestSender?.username ||
-                          thrownAvatars[0]?.username ||
-                          'Người chơi'}
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <div
+                        className="w-9 h-9 rounded-full overflow-hidden border border-amber-300/80 shrink-0 flex items-center justify-center bg-stone-900"
+                        style={{
+                          backgroundColor:
+                            latestSender?.avatarColor ||
+                            thrownAvatars[0]?.avatarColor ||
+                            '#f59e0b',
+                        }}
+                      >
+                        <img
+                          src={resolveAvatarForUsername(
+                            latestSender?.username ||
+                              thrownAvatars[0]?.username ||
+                              'Người Chơi',
+                            latestSender?.avatarUrl ||
+                              thrownAvatars[0]?.avatarUrl,
+                            npcAvatars
+                          )}
+                          alt="sender"
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).src =
+                              DEFAULT_NPC_AVATARS[0];
+                          }}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1 pr-1">
+                        <div className="text-xs font-extrabold text-white break-words leading-tight">
+                          {activeBatchedSenders.length > 1
+                            ? `${activeBatchedSenders.length} người chơi`
+                            : latestSender?.username ||
+                              thrownAvatars[0]?.username ||
+                              'Người chơi'}
+                        </div>
+                        <div className="text-[10px] text-teal-200/80 break-words leading-tight">
+                          {(cameraFocus.totalRoses || 0) > 0 ||
+                          latestSender?.isRose ||
+                          thrownAvatars[0]?.isRose
+                            ? 'đã gửi Hoa hồng'
+                            : `bình luận về ${
+                                cameraFocus.provinceName || 'Hà Nội'
+                              }`}
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-[10px] text-teal-200/80 leading-tight">
-                      {(cameraFocus.totalRoses || 0) > 0 ||
-                      latestSender?.isRose ||
-                      thrownAvatars[0]?.isRose
-                        ? 'đã gửi Hoa hồng'
-                        : `bình luận về ${
-                            cameraFocus.provinceName || 'Hà Nội'
-                          }`}
-                    </div>
-                  </div>
-                  <div className="text-2xl leading-none flex items-center justify-center">
-                    {(cameraFocus.totalRoses || 0) > 0 ||
-                    latestSender?.isRose ||
-                    thrownAvatars[0]?.isRose
-                      ? renderIconContent(
-                          config.roseIconUrl,
-                          '🌹',
-                          'w-6 h-6 object-contain'
-                        )
-                      : renderIconContent(
-                          config.commentIconUrl,
-                          '💖',
-                          'w-6 h-6 object-contain'
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="text-2xl leading-none flex items-center justify-center">
+                        {(cameraFocus.totalRoses || 0) > 0 ||
+                        latestSender?.isRose ||
+                        thrownAvatars[0]?.isRose
+                          ? renderIconContent(
+                              config.roseIconUrl,
+                              '🌹',
+                              'w-6 h-6 object-contain'
+                            )
+                          : renderIconContent(
+                              config.commentIconUrl,
+                              '💖',
+                              'w-6 h-6 object-contain'
+                            )}
+                      </div>
+                      <span className="text-lg font-black italic text-white tracking-tight pr-0.5">
+                        x
+                        {Math.max(
+                          1,
+                          cameraFocus.totalRoses ||
+                            cameraFocus.totalGifts ||
+                            activeBatchedSenders.length ||
+                            1
                         )}
+                      </span>
+                    </div>
                   </div>
-                  <span className="text-lg font-black italic text-white tracking-tight pr-1">
-                    x
-                    {Math.max(
-                      1,
-                      cameraFocus.totalRoses ||
-                        cameraFocus.totalGifts ||
-                        activeBatchedSenders.length ||
-                        1
-                    )}
-                  </span>
-                </div>
+                )}
               </DraggableLayoutBox>
             )}
 
@@ -1634,24 +1682,31 @@ export const GameStage: React.FC<GameStageProps> = ({
                   label="Tiêu Đề Vòng Gặp Gỡ"
                   config={config}
                   scaleFactor={stageScale}
+                  baseWidthPx={452}
+                  baseHeightPx={50}
                   transformOrigin="top center"
                   onUpdateConfig={onUpdateConfig}
-                  baseClassName="absolute top-3.5 left-3.5 right-3.5 z-30"
+                  baseClassName="absolute top-3.5 left-3.5 z-30"
                 >
-                  <div className="h-[50px] px-4 rounded-xl bg-[#11313a]/90 border border-[#245562]/70 backdrop-blur-md flex items-center justify-between shadow-lg">
-                    <div className="flex items-baseline gap-1.5">
-                      <span className="text-[15px] font-bold text-[#cbe0e5]">
-                        {config.sessionTitle || 'Vòng gặp gỡ'}
-                      </span>
-                      <span className="text-xs font-semibold text-[#7da3ad]">
-                        #{roundCounter}
-                      </span>
-                    </div>
+                  {({ minHeightPx }) => (
+                    <div
+                      style={{ minHeight: `${minHeightPx}px` }}
+                      className="w-full px-4 py-1.5 rounded-xl bg-[#11313a]/90 border border-[#245562]/70 backdrop-blur-md flex flex-wrap items-center justify-between content-center gap-2 shadow-lg"
+                    >
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="text-[15px] font-bold text-[#cbe0e5]">
+                          {config.sessionTitle || 'Vòng gặp gỡ'}
+                        </span>
+                        <span className="text-xs font-semibold text-[#7da3ad]">
+                          #{roundCounter}
+                        </span>
+                      </div>
 
-                    <div className="font-mono text-[25px] font-black tracking-wider text-[#e4dec6] tabular-nums">
-                      {formattedTimer}
+                      <div className="font-mono text-[25px] font-black tracking-wider text-[#e4dec6] tabular-nums">
+                        {formattedTimer}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </DraggableLayoutBox>
               )}
 
@@ -1663,34 +1718,41 @@ export const GameStage: React.FC<GameStageProps> = ({
                     label="Thanh Đang Ghé Thăm"
                     config={config}
                     scaleFactor={stageScale}
+                    baseWidthPx={452}
+                    baseHeightPx={52}
                     transformOrigin="top center"
                     onUpdateConfig={onUpdateConfig}
-                    baseClassName="absolute top-[92px] left-3.5 right-3.5 z-30"
+                    baseClassName="absolute top-[92px] left-3.5 z-30"
                   >
-                    <div className="h-[52px] px-4 rounded-xl bg-[#0e2a32]/90 border border-[#204c58]/70 backdrop-blur-md flex items-center justify-between shadow-lg">
-                      <div>
-                        <div className="text-[9px] font-bold uppercase tracking-wider text-[#7fa4ae]">
-                          ĐANG GHÉ THĂM
+                    {({ minHeightPx }) => (
+                      <div
+                        style={{ minHeight: `${minHeightPx}px` }}
+                        className="w-full px-4 py-1.5 rounded-xl bg-[#0e2a32]/90 border border-[#204c58]/70 backdrop-blur-md flex flex-wrap items-center justify-between content-center gap-2 shadow-lg"
+                      >
+                        <div>
+                          <div className="text-[9px] font-bold uppercase tracking-wider text-[#7fa4ae]">
+                            ĐANG GHÉ THĂM
+                          </div>
+                          <div className="text-[17px] font-extrabold text-[#D4F5D0] leading-tight">
+                            {focusedProvince
+                              ? focusedProvince.name.replace(/^TP\.\s*/i, '')
+                              : 'Lạng Sơn'}
+                          </div>
                         </div>
-                        <div className="text-[17px] font-extrabold text-[#D4F5D0] leading-tight">
-                          {focusedProvince
-                            ? focusedProvince.name.replace(/^TP\.\s*/i, '')
-                            : 'Lạng Sơn'}
-                        </div>
-                      </div>
 
-                      <div className="text-right">
-                        <div className="text-[9px] font-bold uppercase tracking-wider text-[#7fa4ae]">
-                          TÍCH LŨY CÁC LIVE
-                        </div>
-                        <div className="text-[17px] font-extrabold text-white leading-tight">
-                          {stats.participantCount}{' '}
-                          <span className="text-xs font-semibold text-[#9ab8c0]">
-                            người
-                          </span>
+                        <div className="text-right">
+                          <div className="text-[9px] font-bold uppercase tracking-wider text-[#7fa4ae]">
+                            TÍCH LŨY CÁC LIVE
+                          </div>
+                          <div className="text-[17px] font-extrabold text-white leading-tight">
+                            {stats.participantCount}{' '}
+                            <span className="text-xs font-semibold text-[#9ab8c0]">
+                              người
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    )}
                   </DraggableLayoutBox>
                 )}
 
@@ -1702,54 +1764,61 @@ export const GameStage: React.FC<GameStageProps> = ({
                     label="Nút Gửi Lời Chào & Icon Quà"
                     config={config}
                     scaleFactor={stageScale}
+                    baseWidthPx={236}
+                    baseHeightPx={76}
                     transformOrigin="top center"
                     onUpdateConfig={onUpdateConfig}
                     baseClassName="absolute top-[38px] left-1/2 -translate-x-1/2 z-30"
                   >
-                    <div className="flex items-start justify-center gap-6 px-2">
-                      {visibleGuideItems.map((item) => {
-                        const badgeCount =
-                          item.statType === 'roses'
-                            ? stats.totalRoses
-                            : item.statType === 'comments'
-                            ? stats.commentCount
-                            : item.statType === 'total_gifts'
-                            ? stats.totalGifts
-                            : item.customBadgeText || 'Hot';
+                    {({ minHeightPx }) => (
+                      <div
+                        style={{ minHeight: `${minHeightPx}px` }}
+                        className="w-full flex flex-wrap items-center justify-center content-center gap-x-5 gap-y-2.5 px-2 py-1"
+                      >
+                        {visibleGuideItems.map((item) => {
+                          const badgeCount =
+                            item.statType === 'roses'
+                              ? stats.totalRoses
+                              : item.statType === 'comments'
+                              ? stats.commentCount
+                              : item.statType === 'total_gifts'
+                              ? stats.totalGifts
+                              : item.customBadgeText || 'Hot';
 
-                        const effectiveIcon =
-                          item.statType === 'roses' &&
-                          config.roseIconUrl &&
-                          config.roseIconUrl !== '🌹'
-                            ? config.roseIconUrl
-                            : item.statType === 'comments' &&
-                              config.commentIconUrl &&
-                              config.commentIconUrl !== '👑'
-                            ? config.commentIconUrl
-                            : item.iconUrl;
+                          const effectiveIcon =
+                            item.statType === 'roses' &&
+                            config.roseIconUrl &&
+                            config.roseIconUrl !== '🌹'
+                              ? config.roseIconUrl
+                              : item.statType === 'comments' &&
+                                config.commentIconUrl &&
+                                config.commentIconUrl !== '👑'
+                              ? config.commentIconUrl
+                              : item.iconUrl;
 
-                        return (
-                          <div
-                            key={item.id}
-                            className="flex flex-col items-center max-w-[92px]"
-                          >
-                            <div className="w-11 h-11 rounded-full bg-[#133842] border border-[#2e6978] shadow-md flex items-center justify-center text-2xl overflow-hidden p-1.5">
-                              {renderIconContent(
-                                effectiveIcon,
-                                '🌹',
-                                'w-full h-full object-contain'
-                              )}
+                          return (
+                            <div
+                              key={item.id}
+                              className="flex flex-col items-center max-w-[92px]"
+                            >
+                              <div className="w-11 h-11 rounded-full bg-[#133842] border border-[#2e6978] shadow-md flex items-center justify-center text-2xl overflow-hidden p-1.5">
+                                {renderIconContent(
+                                  effectiveIcon,
+                                  '🌹',
+                                  'w-full h-full object-contain'
+                                )}
+                              </div>
+                              <span className="-mt-2 px-2 py-0.2 rounded-full bg-[#091e24] border border-[#2b606e] text-[10px] font-extrabold text-white tabular-nums">
+                                {badgeCount}
+                              </span>
+                              <span className="mt-0.5 text-[10.5px] font-bold text-[#d5e6ea] text-center leading-tight">
+                                {item.label}
+                              </span>
                             </div>
-                            <span className="-mt-2 px-2 py-0.2 rounded-full bg-[#091e24] border border-[#2b606e] text-[10px] font-extrabold text-white tabular-nums">
-                              {badgeCount}
-                            </span>
-                            <span className="mt-0.5 text-[10.5px] font-bold text-[#d5e6ea] text-center leading-tight">
-                              {item.label}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </DraggableLayoutBox>
                 )}
             </>
@@ -1764,38 +1833,42 @@ export const GameStage: React.FC<GameStageProps> = ({
               label="Bảng Hướng Dẫn Chơi Game"
               config={config}
               scaleFactor={stageScale}
+              baseWidthPx={Math.max(150, Math.min(510, howToPlay.widthPx || 250))}
+              baseHeightPx={82}
               transformOrigin="top left"
               onUpdateConfig={onUpdateConfig}
               baseClassName="absolute left-3.5 top-[222px] z-30"
             >
-              <div
-                style={{
-                  width: `${Math.max(150, Math.min(510, howToPlay.widthPx || 250))}px`,
-                  fontFamily: howToPlay.fontFamily,
-                }}
-                className="p-3 rounded-xl bg-[#06161c]/92 border border-teal-700/60 backdrop-blur-md shadow-2xl space-y-1"
-              >
-                {howToPlay.title && (
-                  <div
-                    style={{
-                      fontSize: `${Math.max(8, (howToPlay.fontSizePx || 11) - 1)}px`,
-                      color: howToPlay.textColor || '#FDE047',
-                    }}
-                    className="font-black uppercase tracking-wider opacity-95 border-b border-teal-800/70 pb-1"
-                  >
-                    {howToPlay.title}
-                  </div>
-                )}
+              {({ minHeightPx }) => (
                 <div
                   style={{
-                    fontSize: `${howToPlay.fontSizePx || 11}px`,
-                    color: howToPlay.textColor || '#FDE047',
+                    minHeight: `${minHeightPx}px`,
+                    fontFamily: howToPlay.fontFamily,
                   }}
-                  className="font-bold whitespace-pre-line leading-snug"
+                  className="w-full p-3 rounded-xl bg-[#06161c]/92 border border-teal-700/60 backdrop-blur-md shadow-2xl flex flex-col justify-center space-y-1"
                 >
-                  {howToPlay.content}
+                  {howToPlay.title && (
+                    <div
+                      style={{
+                        fontSize: `${Math.max(8, (howToPlay.fontSizePx || 11) - 1)}px`,
+                        color: howToPlay.textColor || '#FDE047',
+                      }}
+                      className="font-black uppercase tracking-wider opacity-95 border-b border-teal-800/70 pb-1 break-words"
+                    >
+                      {howToPlay.title}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      fontSize: `${howToPlay.fontSizePx || 11}px`,
+                      color: howToPlay.textColor || '#FDE047',
+                    }}
+                    className="font-bold whitespace-pre-line break-words leading-snug"
+                  >
+                    {howToPlay.content}
+                  </div>
                 </div>
-              </div>
+              )}
             </DraggableLayoutBox>
           )}
 
@@ -1813,34 +1886,44 @@ export const GameStage: React.FC<GameStageProps> = ({
                   label="Thẻ Giờ Đếm Ngược Phiên"
                   config={config}
                   scaleFactor={stageScale}
+                  baseWidthPx={152}
+                  baseHeightPx={66}
                   transformOrigin="top left"
                   onUpdateConfig={onUpdateConfig}
                   baseClassName="absolute left-3.5 top-[148px] z-30"
                 >
-                  <div className="px-3 py-2 rounded-xl bg-[#0d2b33]/92 border border-emerald-500/50 backdrop-blur-md shadow-xl min-w-[138px]">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[9px] font-extrabold uppercase tracking-wider text-emerald-300">
-                        ⏱ {config.sessionTitle || 'Đua Top Phiên'}
-                      </span>
-                      <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-[9px] font-bold text-emerald-200">
-                        #{roundCounter}
-                      </span>
+                  {({ minHeightPx }) => (
+                    <div
+                      style={{ minHeight: `${minHeightPx}px` }}
+                      className="w-full px-3 py-2 rounded-xl bg-[#0d2b33]/92 border border-emerald-500/50 backdrop-blur-md shadow-xl flex flex-col justify-between gap-1"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <span className="text-[9px] font-extrabold uppercase tracking-wider text-emerald-300">
+                          ⏱ {config.sessionTitle || 'Đua Top Phiên'}
+                        </span>
+                        <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-[9px] font-bold text-emerald-200">
+                          #{roundCounter}
+                        </span>
+                      </div>
+                      <div className="font-mono text-xl font-black text-white tracking-wider tabular-nums">
+                        {formattedTimer}
+                      </div>
+                      <div className="w-full h-1.5 rounded-full bg-stone-900 overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-emerald-400 to-amber-300 transition-all duration-500"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              Math.max(
+                                0,
+                                (secondsLeft / effectiveDuration) * 100
+                              )
+                            )}%`,
+                          }}
+                        />
+                      </div>
                     </div>
-                    <div className="mt-0.5 font-mono text-xl font-black text-white tracking-wider tabular-nums">
-                      {formattedTimer}
-                    </div>
-                    <div className="mt-1 w-full h-1.5 rounded-full bg-stone-900 overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-emerald-400 to-amber-300 transition-all duration-500"
-                        style={{
-                          width: `${Math.min(
-                            100,
-                            Math.max(0, (secondsLeft / effectiveDuration) * 100)
-                          )}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
+                  )}
                 </DraggableLayoutBox>
               )}
 
@@ -1851,35 +1934,50 @@ export const GameStage: React.FC<GameStageProps> = ({
                   label="Biểu Đồ Cột Top 5 Tỉnh"
                   config={config}
                   scaleFactor={stageScale}
+                  baseWidthPx={262}
+                  baseHeightPx={156}
                   transformOrigin="top right"
                   onUpdateConfig={onUpdateConfig}
                   baseClassName="absolute right-3.5 top-[148px] z-30"
                 >
-                  <div className="p-3 rounded-xl bg-[#0d2b33]/92 border border-[#245562]/80 backdrop-blur-md shadow-xl w-[262px]">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10.5px] font-extrabold uppercase tracking-wider text-amber-300">
-                        📊 BXH Top 5 Tỉnh Phiên
-                      </span>
-                      <span className="text-[9px] font-semibold text-teal-200/80">
-                        Top 1–5
-                      </span>
-                    </div>
+                  {({ minHeightPx, scaleY }) => {
+                    const maxPts = Math.max(
+                      1,
+                      ...top5Provinces.map((p) => p.points)
+                    );
+                    const barColors = [
+                      'linear-gradient(180deg, #facc15 0%, #ca8a04 100%)',
+                      'linear-gradient(180deg, #34d399 0%, #059669 100%)',
+                      'linear-gradient(180deg, #38bdf8 0%, #0284c7 100%)',
+                      'linear-gradient(180deg, #a78bfa 0%, #7c3aed 100%)',
+                      'linear-gradient(180deg, #fb7185 0%, #e11d48 100%)',
+                    ];
+                    const barZoneHeightPx = Math.max(
+                      40,
+                      Math.round(76 * scaleY)
+                    );
 
-                    {(() => {
-                      const maxPts = Math.max(
-                        1,
-                        ...top5Provinces.map((p) => p.points)
-                      );
-                      const barColors = [
-                        'linear-gradient(180deg, #facc15 0%, #ca8a04 100%)',
-                        'linear-gradient(180deg, #34d399 0%, #059669 100%)',
-                        'linear-gradient(180deg, #38bdf8 0%, #0284c7 100%)',
-                        'linear-gradient(180deg, #a78bfa 0%, #7c3aed 100%)',
-                        'linear-gradient(180deg, #fb7185 0%, #e11d48 100%)',
-                      ];
+                    return (
+                      <div
+                        style={{ minHeight: `${minHeightPx}px` }}
+                        className="w-full p-3 rounded-xl bg-[#0d2b33]/92 border border-[#245562]/80 backdrop-blur-md shadow-xl flex flex-col justify-between gap-2"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-1">
+                          <span className="text-[10.5px] font-extrabold uppercase tracking-wider text-amber-300">
+                            📊 BXH Top 5 Tỉnh Phiên
+                          </span>
+                          <span className="text-[9px] font-semibold text-teal-200/80">
+                            Top 1–5
+                          </span>
+                        </div>
 
-                      return (
-                        <div className="grid grid-cols-5 gap-2 items-end pt-1 px-0.5">
+                        <div
+                          style={{
+                            gridTemplateColumns:
+                              'repeat(auto-fit, minmax(40px, 1fr))',
+                          }}
+                          className="grid gap-2 items-end pt-1 px-0.5 flex-1"
+                        >
                           {top5Provinces.map((prov, idx) => {
                             const heightPct =
                               prov.points > 0
@@ -1904,10 +2002,13 @@ export const GameStage: React.FC<GameStageProps> = ({
                                   {prov.points}
                                 </span>
 
-                                {/* Cột biểu đồ */}
-                                <div className="w-full h-[76px] flex items-end justify-center">
+                                {/* Cột biểu đồ tự giãn chiều cao theo khung dọc */}
+                                <div
+                                  style={{ height: `${barZoneHeightPx}px` }}
+                                  className="w-full flex items-end justify-center"
+                                >
                                   <div
-                                    className="w-7 rounded-t-md border border-white/30 shadow-md transition-all duration-500"
+                                    className="w-full max-w-[30px] rounded-t-md border border-white/30 shadow-md transition-all duration-500"
                                     style={{
                                       height: `${heightPct}%`,
                                       background:
@@ -1928,9 +2029,9 @@ export const GameStage: React.FC<GameStageProps> = ({
                             );
                           })}
                         </div>
-                      );
-                    })()}
-                  </div>
+                      </div>
+                    );
+                  }}
                 </DraggableLayoutBox>
               )}
             </>
@@ -1945,103 +2046,125 @@ export const GameStage: React.FC<GameStageProps> = ({
               label="Danh Sách Tỉnh Đạt Top 1 Nhiều Nhất"
               config={config}
               scaleFactor={stageScale}
+              baseWidthPx={452}
+              baseHeightPx={168}
               transformOrigin="bottom center"
               onUpdateConfig={onUpdateConfig}
-              baseClassName="absolute left-3.5 right-3.5 bottom-4 z-30"
+              baseClassName="absolute left-3.5 bottom-4 z-30"
             >
-              <div className="p-3.5 rounded-2xl bg-[#0c262e]/92 border border-[#1d4955]/80 backdrop-blur-md shadow-2xl space-y-2.5">
-                {/* Tiêu đề Danh sách tỉnh đạt Top 1 nhiều nhất */}
-                <div className="flex items-center justify-between border-b border-teal-800/70 pb-1.5 px-1">
-                  <span className="text-[11.5px] font-black uppercase tracking-wider text-amber-300 drop-shadow">
-                    🏆{' '}
-                    {config.podiumTitle ||
-                      'DANH SÁCH TỈNH ĐẠT TOP 1 NHIỀU NHẤT'}
-                  </span>
-                  <span className="text-[9.5px] font-bold text-teal-200/85">
-                    Đếm số lần Top 1
-                  </span>
-                </div>
+              {({ minHeightPx, scaleY }) => {
+                const cardHeightPx = Math.max(68, Math.round(96 * scaleY));
+                return (
+                  <div
+                    style={{ minHeight: `${minHeightPx}px` }}
+                    className="w-full p-3.5 rounded-2xl bg-[#0c262e]/92 border border-[#1d4955]/80 backdrop-blur-md shadow-2xl flex flex-col justify-between gap-2.5"
+                  >
+                    {/* Tiêu đề Danh sách tỉnh đạt Top 1 nhiều nhất */}
+                    <div className="flex flex-wrap items-center justify-between gap-1 border-b border-teal-800/70 pb-1.5 px-1">
+                      <span className="text-[11.5px] font-black uppercase tracking-wider text-amber-300 drop-shadow">
+                        🏆{' '}
+                        {config.podiumTitle ||
+                          'DANH SÁCH TỈNH ĐẠT TOP 1 NHIỀU NHẤT'}
+                      </span>
+                      <span className="text-[9.5px] font-bold text-teal-200/85">
+                        Đếm số lần Top 1
+                      </span>
+                    </div>
 
-                <div className="grid grid-cols-3 gap-3.5">
-                  {[0, 1, 2].map((rankIdx) => {
-                    const prov = top3MostTop1Provinces[rankIdx];
-                    const rankLabel = `0${rankIdx + 1}`;
-                    const winCount = prov?.top1WinCount || 0;
-                    const hasAnyRecord =
-                      prov && (winCount > 0 || prov.points > 0);
-                    const shortName = hasAnyRecord
-                      ? prov.name.replace(/^TP\.\s*/i, '')
-                      : 'Chưa có';
+                    <div
+                      style={{
+                        gridTemplateColumns:
+                          'repeat(auto-fit, minmax(105px, 1fr))',
+                      }}
+                      className="grid gap-3 items-stretch flex-1"
+                    >
+                      {[0, 1, 2].map((rankIdx) => {
+                        const prov = top3MostTop1Provinces[rankIdx];
+                        const rankLabel = `0${rankIdx + 1}`;
+                        const winCount = prov?.top1WinCount || 0;
+                        const hasAnyRecord =
+                          prov && (winCount > 0 || prov.points > 0);
+                        const shortName = hasAnyRecord
+                          ? prov.name.replace(/^TP\.\s*/i, '')
+                          : 'Chưa có';
 
-                    const cardGradient =
-                      rankIdx === 0
-                        ? 'linear-gradient(180deg, #d7b46a 0%, #9b7a38 100%)'
-                        : rankIdx === 1
-                        ? 'linear-gradient(180deg, #a2c9c7 0%, #648c8a 100%)'
-                        : 'linear-gradient(180deg, #cf9f80 0%, #8b5f44 100%)';
+                        const cardGradient =
+                          rankIdx === 0
+                            ? 'linear-gradient(180deg, #d7b46a 0%, #9b7a38 100%)'
+                            : rankIdx === 1
+                            ? 'linear-gradient(180deg, #a2c9c7 0%, #648c8a 100%)'
+                            : 'linear-gradient(180deg, #cf9f80 0%, #8b5f44 100%)';
 
-                    const rankColor =
-                      rankIdx === 0
-                        ? 'text-[#e5c168]'
-                        : rankIdx === 1
-                        ? 'text-[#9ecac7]'
-                        : 'text-[#d6a17e]';
+                        const rankColor =
+                          rankIdx === 0
+                            ? 'text-[#e5c168]'
+                            : rankIdx === 1
+                            ? 'text-[#9ecac7]'
+                            : 'text-[#d6a17e]';
 
-                    const topContributor =
-                      prov?.recentContributors?.[0] || null;
-                    const resolvedTopAvatar = topContributor
-                      ? resolveAvatarForUsername(
-                          topContributor.username,
-                          topContributor.avatarUrl,
-                          npcAvatars
-                        )
-                      : null;
+                        const topContributor =
+                          prov?.recentContributors?.[0] || null;
+                        const resolvedTopAvatar = topContributor
+                          ? resolveAvatarForUsername(
+                              topContributor.username,
+                              topContributor.avatarUrl,
+                              npcAvatars
+                            )
+                          : null;
 
-                    return (
-                      <div key={rankIdx} className="flex flex-col items-center">
-                        <div
-                          className="relative w-[108px] h-[96px] rounded-xl shadow-inner border border-white/20 flex flex-col items-center justify-center overflow-hidden px-1"
-                          style={{ background: cardGradient }}
-                        >
-                          <span className="text-2xl font-black text-white drop-shadow leading-none">
-                            {winCount}
-                          </span>
-                          <span className="mt-1 text-[9.5px] font-extrabold uppercase tracking-wider text-amber-100 bg-black/30 px-2 py-0.5 rounded-full">
-                            lần Top 1
-                          </span>
-                          {prov && prov.points > 0 && (
-                            <span className="mt-1 text-[9px] font-bold text-white/90">
-                              Phiên này: {prov.points}đ
-                            </span>
-                          )}
-
-                          <div className="absolute right-1.5 bottom-1.5 w-6 h-6 rounded-full bg-white/25 border border-white/40 overflow-hidden flex items-center justify-center">
-                            {resolvedTopAvatar ? (
-                              <img
-                                src={resolvedTopAvatar}
-                                alt={topContributor?.username || 'top'}
-                                referrerPolicy="no-referrer"
-                                className="w-full h-full object-cover"
-                              />
-                            ) : null}
-                          </div>
-                        </div>
-
-                        <div className="mt-2 flex items-baseline gap-1.5 max-w-full">
-                          <span
-                            className={`text-xs font-extrabold font-mono ${rankColor}`}
+                        return (
+                          <div
+                            key={rankIdx}
+                            className="flex flex-col items-center justify-between"
                           >
-                            {rankLabel}
-                          </span>
-                          <span className="text-[13px] font-bold text-white truncate">
-                            {shortName}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+                            <div
+                              style={{
+                                background: cardGradient,
+                                minHeight: `${cardHeightPx}px`,
+                              }}
+                              className="relative w-full max-w-[136px] flex-1 rounded-xl shadow-inner border border-white/20 flex flex-col items-center justify-center overflow-hidden px-1.5 py-1.5"
+                            >
+                              <span className="text-2xl font-black text-white drop-shadow leading-none">
+                                {winCount}
+                              </span>
+                              <span className="mt-1 text-[9.5px] font-extrabold uppercase tracking-wider text-amber-100 bg-black/30 px-2 py-0.5 rounded-full">
+                                lần Top 1
+                              </span>
+                              {prov && prov.points > 0 && (
+                                <span className="mt-1 text-[9px] font-bold text-white/90">
+                                  Phiên này: {prov.points}đ
+                                </span>
+                              )}
+
+                              <div className="absolute right-1.5 bottom-1.5 w-6 h-6 rounded-full bg-white/25 border border-white/40 overflow-hidden flex items-center justify-center">
+                                {resolvedTopAvatar ? (
+                                  <img
+                                    src={resolvedTopAvatar}
+                                    alt={topContributor?.username || 'top'}
+                                    referrerPolicy="no-referrer"
+                                    className="w-full h-full object-cover"
+                                  />
+                                ) : null}
+                              </div>
+                            </div>
+
+                            <div className="mt-2 flex items-baseline gap-1.5 max-w-full">
+                              <span
+                                className={`text-xs font-extrabold font-mono ${rankColor}`}
+                              >
+                                {rankLabel}
+                              </span>
+                              <span className="text-[13px] font-bold text-white truncate">
+                                {shortName}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              }}
             </DraggableLayoutBox>
           )}
 
