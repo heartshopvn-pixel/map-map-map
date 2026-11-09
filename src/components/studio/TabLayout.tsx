@@ -83,8 +83,8 @@ const LAYOUT_ELEMENT_LABELS: {
   },
   {
     key: 'bottomPodium',
-    title: 'Bục Vinh Danh Top 3 Tỉnh (01, 02, 03)',
-    desc: 'Khung 3 thẻ hạng Nhất, Nhì, Ba dưới đáy màn hình',
+    title: 'Danh Sách Tỉnh Đạt Top 1 Nhiều Nhất (01, 02, 03)',
+    desc: 'Đếm số lần đạt Top 1 của các tỉnh qua các phiên dưới đáy màn hình',
   },
 ];
 
@@ -191,15 +191,24 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
     });
   };
 
-  const handleUpdateElementScale = (key: LayoutElementKey, scale: number) => {
-    const cur = config.layoutPositions?.[key] || { x: 0, y: 0, scale: 1 };
+  const handleUpdateElementScale = (
+    key: LayoutElementKey,
+    patch: { scale?: number; scaleX?: number; scaleY?: number }
+  ) => {
+    const cur = config.layoutPositions?.[key] || {
+      x: 0,
+      y: 0,
+      scale: 1,
+      scaleX: 1,
+      scaleY: 1,
+    };
     onUpdateConfig({
       layoutPositions: {
         ...DEFAULT_LAYOUT_POSITIONS,
         ...(config.layoutPositions || {}),
         [key]: {
           ...cur,
-          ...{ scale },
+          ...patch,
         },
       },
     });
@@ -219,7 +228,7 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
       layoutPositions: {
         ...DEFAULT_LAYOUT_POSITIONS,
         ...(config.layoutPositions || {}),
-        [key]: { x: 0, y: 0, scale: 1 },
+        [key]: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
       },
     });
   };
@@ -392,14 +401,30 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
           <Move className="w-4 h-4" />
           <span>
             {config.layoutEditMode
-              ? 'ĐANG BẬT CHỈNH LAYOUT (Kéo giữa để di chuyển • Kéo góc xanh ⤡ để thu phóng)'
-              : 'BẬT CHỈNH LAYOUT (Cho phép kéo thả & bấm góc chỉnh kích thước)'}
+              ? 'ĐANG BẬT CHỈNH LAYOUT (Kéo góc ⤡ scale đều • Kéo cạnh ↔/↕ chỉnh dài/dọc)'
+              : 'BẬT CHỈNH LAYOUT (Kéo thả • Bấm góc scale • Bấm cạnh chỉnh dài/dọc)'}
           </span>
         </button>
 
         <p className="text-[10.5px] text-stone-400 leading-relaxed">
-          Khi bật chỉnh Layout, mỗi bảng trên màn hình có <strong>4 chấm tròn màu xanh ở 4 góc (⤡)</strong>. Khi bấm vào góc kéo nhỏ hoặc phóng to, <strong>toàn bộ chữ, icon và nội dung bên trong bảng sẽ tự động scale theo tỉ lệ</strong>.
+          Khi bật chỉnh Layout, mỗi bảng có <strong>4 chấm tròn xanh lá ở 4 góc (⤡)</strong> để thu phóng đều và <strong>4 thanh xanh lam ở 4 cạnh (↔ / ↕)</strong> để kéo chỉnh <strong>chiều dài ngang / chiều dọc</strong> riêng biệt.
         </p>
+
+        {/* Tùy chỉnh tiêu đề Danh sách tỉnh đạt Top 1 nhiều nhất */}
+        <div className="p-2.5 rounded-lg bg-stone-950 border border-stone-800 space-y-1">
+          <label className="block text-[10px] text-amber-300 font-bold">
+            🏆 Tiêu đề bảng Danh Sách Tỉnh Đạt Top 1 Nhiều Nhất (đáy màn hình):
+          </label>
+          <input
+            type="text"
+            value={
+              config.podiumTitle || 'DANH SÁCH TỈNH ĐẠT TOP 1 NHIỀU NHẤT'
+            }
+            onChange={(e) => onUpdateConfig({ podiumTitle: e.target.value })}
+            placeholder="DANH SÁCH TỈNH ĐẠT TOP 1 NHIỀU NHẤT"
+            className="w-full px-2.5 py-1.5 rounded-lg bg-stone-900 border border-stone-700 text-xs text-stone-100 font-bold"
+          />
+        </div>
 
         <button
           type="button"
@@ -423,25 +448,29 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
         </button>
       </section>
 
-      {/* 2. Ẩn / Hiện & Chỉnh Tỉ Lệ Scale Từng Bảng Trên Màn Hình */}
+      {/* 2. Ẩn / Hiện & Chỉnh Tỉ Lệ Scale / Chiều Dài / Chiều Dọc Từng Bảng Trên Màn Hình */}
       <section className="p-3.5 rounded-xl bg-stone-900/85 border border-stone-800 space-y-2.5">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-bold text-stone-100 uppercase tracking-wide">
-            Ẩn / Hiện & Kích Thước Các Bảng ({LAYOUT_ELEMENT_LABELS.length})
+            Ẩn / Hiện & Chỉnh Dài / Dọc Các Bảng ({LAYOUT_ELEMENT_LABELS.length})
           </h2>
           <span className="text-[10px] text-stone-400">
             Bấm Mắt để Ẩn/Hiện
           </span>
         </div>
 
-        <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+        <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
           {LAYOUT_ELEMENT_LABELS.map((el) => {
             const pos = config.layoutPositions?.[el.key] || {
               x: 0,
               y: 0,
               scale: 1,
+              scaleX: 1,
+              scaleY: 1,
             };
             const scaleVal = pos.scale ?? 1;
+            const scaleXVal = pos.scaleX ?? 1;
+            const scaleYVal = pos.scaleY ?? 1;
             const visible = visibilityMap[el.key] !== false;
 
             return (
@@ -464,6 +493,14 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
                       Scale:{' '}
                       <strong className="text-emerald-300">
                         {Math.round(scaleVal * 100)}%
+                      </strong>{' '}
+                      • Dài:{' '}
+                      <strong className="text-cyan-300">
+                        {Math.round(scaleXVal * 100)}%
+                      </strong>{' '}
+                      • Dọc:{' '}
+                      <strong className="text-cyan-300">
+                        {Math.round(scaleYVal * 100)}%
                       </strong>
                     </div>
                   </div>
@@ -502,10 +539,10 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
                   </div>
                 </div>
 
-                {/* Thanh trượt thu phóng nhanh (Scale nội dung bên trong) */}
+                {/* Thanh trượt thu phóng đều (Góc) */}
                 <div className="flex items-center gap-2 pt-0.5">
-                  <span className="text-[10px] text-stone-400 shrink-0">
-                    Thu phóng:
+                  <span className="text-[10px] text-stone-400 w-16 shrink-0">
+                    Scale đều:
                   </span>
                   <input
                     type="range"
@@ -514,16 +551,62 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
                     step={0.05}
                     value={scaleVal}
                     onChange={(e) =>
-                      handleUpdateElementScale(
-                        el.key,
-                        parseFloat(e.target.value)
-                      )
+                      handleUpdateElementScale(el.key, {
+                        scale: parseFloat(e.target.value),
+                      })
                     }
                     className="flex-1 accent-emerald-400 h-1 bg-stone-800 rounded-lg cursor-pointer"
                   />
                   <span className="text-[10px] font-mono font-bold text-emerald-300 w-9 text-right">
                     {Math.round(scaleVal * 100)}%
                   </span>
+                </div>
+
+                {/* Thanh trượt Chiều dài ngang (scaleX) & Chiều dọc (scaleY) */}
+                <div className="grid grid-cols-2 gap-2 pt-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[9.5px] text-cyan-300 shrink-0">
+                      ↔ Dài:
+                    </span>
+                    <input
+                      type="range"
+                      min={0.4}
+                      max={2.5}
+                      step={0.05}
+                      value={scaleXVal}
+                      onChange={(e) =>
+                        handleUpdateElementScale(el.key, {
+                          scaleX: parseFloat(e.target.value),
+                        })
+                      }
+                      className="flex-1 accent-cyan-400 h-1 bg-stone-800 rounded-lg cursor-pointer"
+                    />
+                    <span className="text-[9.5px] font-mono text-cyan-200 w-8 text-right">
+                      {Math.round(scaleXVal * 100)}%
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[9.5px] text-cyan-300 shrink-0">
+                      ↕ Dọc:
+                    </span>
+                    <input
+                      type="range"
+                      min={0.4}
+                      max={2.5}
+                      step={0.05}
+                      value={scaleYVal}
+                      onChange={(e) =>
+                        handleUpdateElementScale(el.key, {
+                          scaleY: parseFloat(e.target.value),
+                        })
+                      }
+                      className="flex-1 accent-cyan-400 h-1 bg-stone-800 rounded-lg cursor-pointer"
+                    />
+                    <span className="text-[9.5px] font-mono text-cyan-200 w-8 text-right">
+                      {Math.round(scaleYVal * 100)}%
+                    </span>
+                  </div>
                 </div>
               </div>
             );

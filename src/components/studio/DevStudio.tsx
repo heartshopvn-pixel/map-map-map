@@ -69,7 +69,8 @@ interface DevStudioProps {
     isRose: boolean,
     specificProvinceId?: string,
     customUsername?: string,
-    isNpc?: boolean
+    isNpc?: boolean,
+    roseCountOverride?: number
   ) => void;
   onTriggerBatchSameProvince: (
     provinceId?: string,

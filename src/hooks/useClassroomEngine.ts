@@ -9,6 +9,7 @@ import {
   DEFAULT_LAYOUT_VISIBILITY,
   DEFAULT_NPC_AVATARS,
   DEFAULT_TTS_RANDOM_PHRASES,
+  DEFAULT_WELCOME_JOIN_PHRASES,
   isRoseKeywordInText,
   matchProvinceFromComment,
   SAMPLE_NAMES,
@@ -55,6 +56,7 @@ export interface ActivityLogItem {
 
 export interface SessionEndSummaryState {
   sessionNum: number;
+  sessionTitle?: string;
   top3: ProvinceCell[];
   top5: ProvinceCell[];
   deferredQueueCount: number;
@@ -146,6 +148,28 @@ export function useClassroomEngine() {
           commentGiftTtsTemplate: commentTpl,
           roseGiftTtsTemplate: roseTpl,
           batchGiftTtsTemplate: batchTpl,
+          multiRoseGiftTtsTemplate:
+            parsed.multiRoseGiftTtsTemplate ||
+            DEFAULT_CONFIG.multiRoseGiftTtsTemplate,
+          welcomeJoinEnabled:
+            parsed.welcomeJoinEnabled !== undefined
+              ? Boolean(parsed.welcomeJoinEnabled)
+              : DEFAULT_CONFIG.welcomeJoinEnabled,
+          welcomeJoinPhrases:
+            Array.isArray(parsed.welcomeJoinPhrases) &&
+            parsed.welcomeJoinPhrases.length > 0
+              ? parsed.welcomeJoinPhrases
+              : DEFAULT_WELCOME_JOIN_PHRASES,
+          rosePromptEnabled:
+            parsed.rosePromptEnabled !== undefined
+              ? Boolean(parsed.rosePromptEnabled)
+              : DEFAULT_CONFIG.rosePromptEnabled,
+          rosePromptChancePercent:
+            parsed.rosePromptChancePercent !== undefined
+              ? Number(parsed.rosePromptChancePercent)
+              : DEFAULT_CONFIG.rosePromptChancePercent,
+          rosePromptTemplate:
+            parsed.rosePromptTemplate || DEFAULT_CONFIG.rosePromptTemplate,
           roundStartTtsEnabled:
             parsed.roundStartTtsEnabled !== undefined
               ? Boolean(parsed.roundStartTtsEnabled)
@@ -204,6 +228,7 @@ export function useClassroomEngine() {
               points: Number(found.points) || 0,
               giftCount: Number(found.giftCount) || 0,
               roseCount: Number(found.roseCount) || 0,
+              top1WinCount: Number(found.top1WinCount) || 0,
               recentContributors: Array.isArray(found.recentContributors)
                 ? found.recentContributors.slice(0, 24)
                 : [],
@@ -301,6 +326,8 @@ export function useClassroomEngine() {
 
   const userProvinceMemoryRef = useRef<Map<string, string>>(new Map());
   const userAvatarMemoryRef = useRef<Map<string, string>>(new Map());
+  // Trong mỗi phiên, mỗi người chơi chỉ được bình luận 1 lần để +1 điểm (nhưng được tặng hoa hồng không giới hạn)
+  const sessionCommentedUsersRef = useRef<Set<string>>(new Set());
 
   // Persist config & provinces
   useEffect(() => {
@@ -394,7 +421,7 @@ export function useClassroomEngine() {
 
   /**
    * Ghi nhận điểm số + lưu toàn bộ người chơi đóng góp trong phiên (tối đa 24 người/tỉnh) + đọc AI #3
-   * Đọc gộp TẤT CẢ tên người chơi trong lượt tỉnh đó cùng lúc kèm % câu chào / vu vơ!
+   * Đọc gộp TẤT CẢ tên người chơi trong lượt tỉnh đó cùng lúc kèm % câu chào / vu vơ hoặc lời cảm ơn nhiều hoa hồng!
    */
   const commitGiftTurnToProvinceAndTTS = useCallback(
     (
@@ -442,7 +469,9 @@ export function useClassroomEngine() {
           const mergedContribs = [
             ...newEntries,
             ...Array.from(existingMap.values()),
-          ].slice(0, sessionContributorCap);
+          ]
+            .sort((a, b) => b.pointsAdded - a.pointsAdded)
+            .slice(0, sessionContributorCap);
 
           return {
             ...p,
@@ -471,7 +500,8 @@ export function useClassroomEngine() {
       setActivityLogs((prev) => [...newLogs, ...prev].slice(0, 40));
 
       const anyRose = totalRosesAdded > 0 || senders.some((s) => s.isRose);
-      const anyNpc = senders.some((s) => Boolean(s.isNpc));
+      // NPC hỗ trợ 1 điểm (!isRose) được coi là người chơi bình thường, không đọc từ "NPC"
+      const anyNpc = senders.some((s) => Boolean(s.isNpc && s.isRose));
       const uniqueNames = Array.from(new Set(senders.map((s) => s.username)));
 
       const speechText =
@@ -492,7 +522,8 @@ export function useClassroomEngine() {
               anyRose,
               cfg,
               true,
-              anyNpc
+              anyNpc,
+              Math.max(1, totalRosesAdded)
             );
 
       soundEngine.enqueueTTS(speechText, anyRose, cfg, {
@@ -657,10 +688,10 @@ export function useClassroomEngine() {
    * Luồng Kết Thúc Phiên Chơi & Chuyển Sang Vòng Mới:
    * - Ngắt ngay việc đọc quà thường, dừng lấy thêm hàng chờ Camera
    * - Đưa Camera về Map tổng
-   * - Thông báo Kết Quả Phiên & đọc vinh danh Top 3 tỉnh điểm cao nhất bằng Giọng đọc AI #3
-   * - Bảo toàn toàn bộ hàng chờ quà còn tồn đọng chưa đọc (cameraQueue) để đẩy sang phiên tiếp theo
-   * - Sau khi thông báo xong -> Reset tất cả dữ liệu tỉnh, đọc lời chào "Vòng X+1 bắt đầu, mời các bạn tham gia giao lưu với nhau!"
-   *   và tự động chạy tiếp hàng chờ tồn đọng ở vòng mới!
+   * - Cộng +1 lần đạt Top 1 (`top1WinCount`) cho tỉnh dẫn đầu phiên (nếu có điểm > 0)
+   * - Thông báo Kết Quả Phiên & đọc vinh danh Top 3 tỉnh kèm TÊN NGƯỜI TẶNG ĐIỂM NHIỀU NHẤT của mỗi tỉnh bằng Giọng đọc AI #3
+   * - ƯU TIÊN THEO NGƯỜI ĐỌC: Ngay khi Giọng đọc AI #3 đọc xong câu tổng kết -> lập tức chuyển luồng sang vòng mới,
+   *   reset điểm phiên (giữ nguyên `top1WinCount`), reset danh sách 1-bình-luận/phiên, đọc lời chào Vòng mới và chạy tiếp hàng chờ tồn đọng!
    */
   const handleSessionTimeUp = useCallback((sessionNum: number) => {
     if (isSessionEndingRef.current) return;
@@ -679,44 +710,78 @@ export function useClassroomEngine() {
     const top5 = sorted.slice(0, 5);
     const top3 = sorted.slice(0, 3);
     const scoredTop3 = top3.filter((p) => p.points > 0);
+    const top1WinnerId = scoredTop3.length > 0 ? scoredTop3[0].id : null;
     const deferredCount = cameraQueueRef.current.length;
+    const sessionName = configRef.current.sessionTitle || 'Vòng';
 
-    let speechText = '';
+    // Cập nhật ngay số lần đạt Top 1 cho tỉnh hạng nhất phiên này
+    if (top1WinnerId) {
+      const updatedWithWin = provincesRef.current.map((p) =>
+        p.id === top1WinnerId
+          ? { ...p, top1WinCount: (p.top1WinCount || 0) + 1 }
+          : p
+      );
+      provincesRef.current = updatedWithWin;
+      setProvinces(updatedWithWin);
+    }
+
+    const summarySentences: string[] = [];
     if (scoredTop3.length === 0) {
-      speechText = `Kết thúc vòng ${sessionNum}. Chưa có tỉnh nào ghi điểm trong vòng này.`;
+      summarySentences.push(
+        `Kết thúc ${sessionName} ${sessionNum}. Chưa có tỉnh nào ghi điểm trong phiên này.`
+      );
     } else {
-      const rankPhrases = scoredTop3.map((p, idx) => {
+      summarySentences.push(
+        `Kết thúc ${sessionName} ${sessionNum}! Tổng kết 3 tỉnh dẫn đầu phiên:`
+      );
+      scoredTop3.forEach((p, idx) => {
         const rankName =
           idx === 0 ? 'Hạng nhất' : idx === 1 ? 'Hạng nhì' : 'Hạng ba';
-        return `${rankName} thuộc về ${p.name} với ${p.points} điểm`;
+        const topContributor = [...(p.recentContributors || [])].sort(
+          (a, b) => b.pointsAdded - a.pointsAdded
+        )[0];
+        const contributorPhrase = topContributor
+          ? `, người tặng điểm nhiều nhất là ${topContributor.username.replace(
+              /^NPC\s+/i,
+              ''
+            )} với ${topContributor.pointsAdded} điểm`
+          : '';
+        summarySentences.push(
+          `${rankName} thuộc về ${p.name.replace(/^TP\.\s*/i, '')} với ${
+            p.points
+          } điểm${contributorPhrase}.`
+        );
       });
       const deferNote =
         deferredCount > 0
-          ? ` Còn ${deferredCount} lượt trong hàng chờ sẽ được chuyển sang vòng tiếp theo.`
+          ? ` Còn ${deferredCount} lượt trong hàng chờ sẽ chuyển sang phiên mới.`
           : '';
-      speechText = `Kết thúc vòng ${sessionNum}! Tổng kết 3 tỉnh dẫn đầu: ${rankPhrases.join(
-        '. '
-      )}. Xin chúc mừng!${deferNote}`;
+      summarySentences.push(`Xin chúc mừng các tỉnh dẫn đầu!${deferNote}`);
     }
+
+    const speechText = summarySentences.join(' ');
 
     setSessionEndSummary({
       sessionNum,
+      sessionTitle: sessionName,
       top3,
       top5,
       deferredQueueCount: deferredCount,
       speechText,
     });
 
-    // Ngắt hàng đợi đọc quà cũ và đọc ngay thông báo tổng kết Top 3 tỉnh của phiên
-    soundEngine.announceSessionResultNow(speechText, configRef.current);
+    let transitioned = false;
+    const transitionToNextRound = () => {
+      if (transitioned) return;
+      transitioned = true;
+      if (sessionEndTimeoutRef.current) {
+        window.clearTimeout(sessionEndTimeoutRef.current);
+        sessionEndTimeoutRef.current = null;
+      }
 
-    const holdMs =
-      Math.max(4, configRef.current.sessionResultHoldSec || 7) * 1000;
-    if (sessionEndTimeoutRef.current) {
-      window.clearTimeout(sessionEndTimeoutRef.current);
-    }
+      // Reset giới hạn bình luận 1 lần/phiên cho phiên mới
+      sessionCommentedUsersRef.current.clear();
 
-    sessionEndTimeoutRef.current = window.setTimeout(() => {
       const freshProvinces = createInitialProvinces().map((baseProv) => {
         const currentProv = provincesRef.current.find(
           (p) => p.id === baseProv.id
@@ -727,6 +792,7 @@ export function useClassroomEngine() {
           points: 0,
           giftCount: 0,
           roseCount: 0,
+          top1WinCount: currentProv?.top1WinCount || 0,
           recentContributors: [],
           lastUpdatedAt: 0,
         };
@@ -737,6 +803,10 @@ export function useClassroomEngine() {
       setProvinces(freshProvinces);
       setActivityLogs([]);
       setSessionEndSummary(null);
+      setConfig((prev) => ({
+        ...prev,
+        roundNumber: nextRoundNum,
+      }));
       isSessionEndingRef.current = false;
 
       // Đọc luồng âm thanh báo Vòng mới bắt đầu, mời các bạn tham gia giao lưu với nhau
@@ -745,11 +815,50 @@ export function useClassroomEngine() {
       syncService.sendCommand('UPDATE_PROVINCES_STATE', {
         provinces: freshProvinces,
       });
-    }, holdMs);
+    };
+
+    // Đọc lần lượt đầy đủ tất cả các câu tổng kết Top 3 tỉnh kèm người đóng góp nhiều nhất.
+    // CHỈ KHI NGƯỜI ĐỌC ĐỌC XONG HẾT toàn bộ phần tổng kết mới chuyển sang phiên game mới!
+    soundEngine.announceSessionResultNow(
+      summarySentences,
+      configRef.current,
+      () => {
+        const waitUntilReaderIdle = () => {
+          if (transitioned) return;
+          if (soundEngine.isBusySpeakingOrQueued()) {
+            window.setTimeout(waitUntilReaderIdle, 250);
+            return;
+          }
+          window.setTimeout(transitionToNextRound, 350);
+        };
+        waitUntilReaderIdle();
+      }
+    );
+
+    // Bộ kiểm tra an toàn: Nếu người đọc vẫn đang đọc (isBusySpeakingOrQueued = true) thì tiếp tục chờ,
+    // tuyệt đối không ngắt ngang khi đang đọc tổng kết!
+    const startedSummaryAt = Date.now();
+    const checkSummarySafety = () => {
+      if (transitioned) return;
+      const elapsedMs = Date.now() - startedSummaryAt;
+      if (soundEngine.isBusySpeakingOrQueued() && elapsedMs < 90000) {
+        sessionEndTimeoutRef.current = window.setTimeout(
+          checkSummarySafety,
+          1000
+        );
+        return;
+      }
+      transitionToNextRound();
+    };
+    if (sessionEndTimeoutRef.current) {
+      window.clearTimeout(sessionEndTimeoutRef.current);
+    }
+    sessionEndTimeoutRef.current = window.setTimeout(checkSummarySafety, 8000);
   }, []);
 
   /**
    * Hàm trung tâm xử lý khi người chơi bình luận đến tỉnh (+1đ) hoặc gửi hoa hồng (+5đ)
+   * - Trong mỗi phiên: người chơi chỉ được bình luận 1 lần để +1 điểm (nhưng có thể tặng nhiều hoa hồng & nhiều điểm không giới hạn!)
    * - Khi đang chờ trong `cameraQueue`, nếu có người mới vào cùng tỉnh -> gom tất cả vào chung 1 mục của tỉnh đó
    *   để khi tới lượt sẽ đọc 1 lúc tất cả các tên cho hết nhanh hàng chờ!
    */
@@ -763,14 +872,38 @@ export function useClassroomEngine() {
         isNpc?: boolean;
         pointsOverride?: number;
         roseCountOverride?: number;
+        bypassCommentLimit?: boolean;
       },
       broadcastSync = true
-    ) => {
+    ): { ok: boolean; reason?: string } => {
       const cfg = configRef.current;
       const targetProv = provincesRef.current.find(
         (p) => p.id === payload.provinceId
       );
-      if (!targetProv) return;
+      if (!targetProv) return { ok: false, reason: 'province_not_found' };
+
+      const cleanUser = (payload.username || 'Người Chơi').trim();
+      const userKey = cleanUser.toLowerCase();
+      const isFromNpc = Boolean(payload.isNpc);
+      // NPC hỗ trợ 1 điểm (!isRose) coi như người chơi bình thường, không gắn cờ isNpc để không đọc từ "NPC"
+      const isNpcSender = Boolean(payload.isNpc && payload.isRose);
+
+      // Luôn ghi nhớ tỉnh người chơi chọn để khi họ tặng hoa hồng sẽ cộng về đúng tỉnh đó
+      userProvinceMemoryRef.current.set(userKey, targetProv.id);
+
+      // Kiểm tra giới hạn: Trong mỗi phiên, người chơi thật chỉ được comment 1 lần để +1 điểm
+      if (
+        !payload.isRose &&
+        !isFromNpc &&
+        !payload.bypassCommentLimit &&
+        sessionCommentedUsersRef.current.has(userKey)
+      ) {
+        return { ok: false, reason: 'already_commented_in_session' };
+      }
+
+      if (!payload.isRose && !isFromNpc) {
+        sessionCommentedUsersRef.current.add(userKey);
+      }
 
       const roseCount = payload.isRose
         ? Math.max(1, payload.roseCountOverride || 1)
@@ -782,8 +915,6 @@ export function useClassroomEngine() {
           ? Math.max(1, (cfg.rosePoints || 5) * roseCount)
           : Math.max(1, cfg.commentPoints || 1);
 
-      const cleanUser = (payload.username || 'Người Chơi').trim();
-      const userKey = cleanUser.toLowerCase();
       const avatarColor = pickColorForUser(cleanUser);
       const rememberedAvatar = userAvatarMemoryRef.current.get(userKey);
       const avatarUrl = resolveAvatarForUsername(
@@ -793,9 +924,6 @@ export function useClassroomEngine() {
       );
       userAvatarMemoryRef.current.set(userKey, avatarUrl);
       const now = Date.now();
-      const isNpcSender = Boolean(payload.isNpc);
-
-      userProvinceMemoryRef.current.set(userKey, targetProv.id);
 
       const contributor: ProvinceContributor = {
         id: `contrib_${now}_${Math.random().toString(36).slice(2, 6)}`,
@@ -860,7 +988,7 @@ export function useClassroomEngine() {
       // Nếu đang trong luồng tổng kết cuối phiên -> Đẩy toàn bộ quà phát sinh vào hàng chờ cho phiên sau!
       if (isSessionEndingRef.current) {
         enqueueAndMergeSameProvince();
-        return;
+        return { ok: true };
       }
 
       if (cfg.cameraAutoZoom) {
@@ -982,8 +1110,10 @@ export function useClassroomEngine() {
           isNpc: isNpcSender,
           pointsOverride: pointsAdded,
           roseCountOverride: roseCount,
+          bypassCommentLimit: true,
         });
       }
+      return { ok: true };
     },
     [commitGiftTurnToProvinceAndTTS, spawnThrowAvatarFX]
   );
@@ -1021,7 +1151,7 @@ export function useClassroomEngine() {
           ? forceIsRose
           : isRoseKeywordInText(rawComment);
 
-      executeProvinceGift(
+      const res = executeProvinceGift(
         {
           provinceId: matchedProvince.id,
           username: inspection.safeUsername,
@@ -1031,7 +1161,7 @@ export function useClassroomEngine() {
         },
         true
       );
-      return true;
+      return res.ok;
     },
     [customWords, executeProvinceGift, safetyActionMode, safetyCategories]
   );
@@ -1070,7 +1200,7 @@ export function useClassroomEngine() {
       if (!targetProvinceId) return;
 
       const baseRosePoints = Math.max(1, configRef.current.rosePoints || 5);
-      const multiplier = Math.max(1, repeatCount || 1);
+      const multiplier = Math.max(1, repeatCount || coins || 1);
       const totalPoints = baseRosePoints * multiplier;
 
       executeProvinceGift(
@@ -1114,6 +1244,20 @@ export function useClassroomEngine() {
           ev.repeatCount || ev.comboCount || 1,
           ev.avatarUrl || ev.profilePictureUrl || null
         );
+      } else if (ev.type === 'member') {
+        const inspection = inspectUserInteraction(
+          ev.username || 'Bạn mới',
+          '',
+          safetyActionMode,
+          safetyCategories,
+          customWords
+        );
+        if (inspection.allowed) {
+          soundEngine.enqueueWelcomeJoin(
+            inspection.safeUsername,
+            configRef.current
+          );
+        }
       }
     });
 
@@ -1129,11 +1273,21 @@ export function useClassroomEngine() {
             isNpc: Boolean(payload.isNpc),
             pointsOverride: payload.pointsOverride,
             roseCountOverride: payload.roseCountOverride,
+            bypassCommentLimit: true,
           },
           false
         );
       } else if (action === 'RESET_ALL_PROVINCES') {
-        const fresh = createInitialProvinces();
+        sessionCommentedUsersRef.current.clear();
+        const fresh = createInitialProvinces().map((baseProv) => {
+          const cur = provincesRef.current.find((p) => p.id === baseProv.id);
+          return {
+            ...baseProv,
+            top1WinCount: payload?.resetTop1Wins
+              ? 0
+              : cur?.top1WinCount || 0,
+          };
+        });
         provincesRef.current = fresh;
         setProvinces(fresh);
         setActivityLogs([]);
@@ -1199,7 +1353,15 @@ export function useClassroomEngine() {
       unsubTikTok();
       unsubSync();
     };
-  }, [executeProvinceGift, handleUserComment, handleUserGift, isObsView]);
+  }, [
+    customWords,
+    executeProvinceGift,
+    handleUserComment,
+    handleUserGift,
+    isObsView,
+    safetyActionMode,
+    safetyCategories,
+  ]);
 
   // Giả lập NPC tự động hỗ trợ điểm tỉnh với chu kỳ cộng trừ ngẫu nhiên ±1..2s để tạo độ tự nhiên
   useEffect(() => {
@@ -1275,8 +1437,15 @@ export function useClassroomEngine() {
     });
   }, []);
 
-  const handleResetAllProvinces = useCallback(() => {
-    const fresh = createInitialProvinces();
+  const handleResetAllProvinces = useCallback((resetTop1Wins = false) => {
+    sessionCommentedUsersRef.current.clear();
+    const fresh = createInitialProvinces().map((baseProv) => {
+      const cur = provincesRef.current.find((p) => p.id === baseProv.id);
+      return {
+        ...baseProv,
+        top1WinCount: resetTop1Wins ? 0 : cur?.top1WinCount || 0,
+      };
+    });
     provincesRef.current = fresh;
     setProvinces(fresh);
     setActivityLogs([]);
@@ -1290,7 +1459,7 @@ export function useClassroomEngine() {
       configRef.current.roundNumber || 69,
       configRef.current
     );
-    syncService.sendCommand('RESET_ALL_PROVINCES', {});
+    syncService.sendCommand('RESET_ALL_PROVINCES', { resetTop1Wins });
   }, []);
 
   const handleRenameProvince = useCallback(
@@ -1326,7 +1495,8 @@ export function useClassroomEngine() {
       isRose: boolean,
       specificProvinceId?: string,
       customUsername?: string,
-      isNpc = false
+      isNpc = false,
+      roseCountOverride = 1
     ) => {
       const list = provincesRef.current;
       if (list.length === 0) return;
@@ -1340,6 +1510,7 @@ export function useClassroomEngine() {
           ? customUsername.trim()
           : names[Math.floor(Math.random() * names.length)];
       const avatarUrl = avatars[Math.floor(Math.random() * avatars.length)];
+      const cleanCount = isRose ? Math.max(1, roseCountOverride || 1) : 1;
 
       executeProvinceGift(
         {
@@ -1348,6 +1519,10 @@ export function useClassroomEngine() {
           avatarUrl,
           isRose,
           isNpc,
+          roseCountOverride: cleanCount,
+          pointsOverride: isRose
+            ? Math.max(1, (configRef.current.rosePoints || 5) * cleanCount)
+            : undefined,
         },
         true
       );
@@ -1487,6 +1662,7 @@ export function useClassroomEngine() {
         points: p.points,
         giftCount: p.giftCount,
         roseCount: p.roseCount,
+        top1WinCount: p.top1WinCount || 0,
         recentContributors: p.recentContributors,
       })),
       npcNames,
@@ -1574,6 +1750,10 @@ export function useClassroomEngine() {
                 points: Number(found.points) || 0,
                 giftCount: Number(found.giftCount) || 0,
                 roseCount: Number(found.roseCount) || 0,
+                top1WinCount:
+                  typeof found.top1WinCount === 'number'
+                    ? found.top1WinCount
+                    : item.top1WinCount || 0,
                 recentContributors: Array.isArray(found.recentContributors)
                   ? found.recentContributors
                   : [],

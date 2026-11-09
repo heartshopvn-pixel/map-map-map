@@ -4,7 +4,7 @@ export type WsConnectionStatus = 'simulated' | 'connecting' | 'connected' | 'err
 
 type SyncListener = (packet: SyncPacket) => void;
 type TikTokEventListener = (event: {
-  type: 'chat' | 'gift' | 'like' | 'follow';
+  type: 'chat' | 'gift' | 'like' | 'follow' | 'member';
   username: string;
   avatarUrl?: string | null;
   profilePictureUrl?: string | null;
@@ -105,7 +105,7 @@ class LiveSyncService {
   }
 
   private emitDeduplicatedTikTokEvent(ev: {
-    type: 'chat' | 'gift' | 'like' | 'follow';
+    type: 'chat' | 'gift' | 'like' | 'follow' | 'member';
     username: string;
     avatarUrl?: string | null;
     profilePictureUrl?: string | null;
@@ -137,6 +137,8 @@ class LiveSyncService {
       this.appendTikTokLog(`❤️ [LIKE] ${ev.username} thả ${ev.likeCount || 1} tim`);
     } else if (ev.type === 'follow') {
       this.appendTikTokLog(`➕ [FOLLOW] ${ev.username} đã follow kênh`);
+    } else if (ev.type === 'member') {
+      this.appendTikTokLog(`👋 [VÀO PHÒNG] ${ev.username} đã vào phòng Live`);
     }
 
     this.tiktokListeners.forEach((fn) => fn(ev));
@@ -587,13 +589,14 @@ class LiveSyncService {
       return;
     }
 
-    // Format 1: Custom Node.js server.js bridge ({ type: 'chat' | 'gift' | 'like' | 'follow', ... })
+    // Format 1: Custom Node.js server.js bridge ({ type: 'chat' | 'gift' | 'like' | 'follow' | 'member', ... })
     if (
       raw.type === 'chat' ||
       raw.type === 'comment' ||
       raw.type === 'gift' ||
       raw.type === 'like' ||
-      raw.type === 'follow'
+      raw.type === 'follow' ||
+      raw.type === 'member'
     ) {
       const normalizedType = raw.type === 'comment' ? 'chat' : raw.type;
       const normalized = {
@@ -618,10 +621,16 @@ class LiveSyncService {
       return;
     }
 
-    // Format 2: Direct TikFinity WebSocket (ws://localhost:21213) ({ event: 'chat' | 'gift' | 'like' | 'follow', data: {...} })
+    // Format 2: Direct TikFinity WebSocket (ws://localhost:21213) ({ event: 'chat' | 'gift' | 'like' | 'follow' | 'member', data: {...} })
     const rawEv = raw.event === 'comment' ? 'chat' : raw.event;
     const d = raw.data || {};
-    if (rawEv === 'chat' || rawEv === 'gift' || rawEv === 'like' || rawEv === 'follow') {
+    if (
+      rawEv === 'chat' ||
+      rawEv === 'gift' ||
+      rawEv === 'like' ||
+      rawEv === 'follow' ||
+      rawEv === 'member'
+    ) {
       if (rawEv === 'gift' && d.giftType === 1 && d.repeatEnd === false) {
         return;
       }

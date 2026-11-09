@@ -264,8 +264,12 @@ export const TabNpc: React.FC<TabNpcProps> = ({
               }
               className="w-full px-2.5 py-1.5 rounded-lg bg-stone-950 border border-emerald-500/40 text-xs text-stone-100 focus:outline-none focus:border-emerald-400"
             />
-            <p className="mt-1 text-[10px] text-stone-400">
-              * Khi NPC gửi hoa hồng hoặc quà coin, hệ thống tự động đọc đầu ngữ{' '}
+            <p className="mt-1 text-[10px] text-stone-400 leading-relaxed">
+              * Khi NPC hỗ trợ <strong>1 điểm (+1đ)</strong>: Coi như người chơi
+              bình thường, <strong>không đọc từ NPC</strong> (VD:{' '}
+              <em>&quot;Bạn A đã đến tỉnh B và gửi 1 điểm&quot;</em>).
+              <br />* Khi NPC gửi <strong>Hoa Hồng / Quà Coin (+5đ)</strong>:
+              Đọc{' '}
               <strong className="text-emerald-300">
                 &quot;NPC + Tên đã hỗ trợ số điểm về tỉnh&quot;
               </strong>{' '}
@@ -281,7 +285,7 @@ export const TabNpc: React.FC<TabNpcProps> = ({
             className="py-1.5 px-2 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[11px] font-semibold text-stone-200 flex items-center justify-center gap-1 cursor-pointer"
           >
             <Play className="w-3 h-3 text-cyan-400" />
-            <span>1 NPC Hỗ Trợ (+{config.commentPoints}đ)</span>
+            <span>NPC +1đ (Như người thường)</span>
           </button>
           <button
             type="button"
@@ -289,7 +293,7 @@ export const TabNpc: React.FC<TabNpcProps> = ({
             className="py-1.5 px-2 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-[11px] font-semibold text-rose-200 flex items-center justify-center gap-1 cursor-pointer"
           >
             <Sparkles className="w-3 h-3 text-rose-400" />
-            <span>1 NPC Hỗ Trợ (+{config.rosePoints}đ)</span>
+            <span>NPC Hỗ Trợ (+{config.rosePoints}đ)</span>
           </button>
         </div>
       </section>

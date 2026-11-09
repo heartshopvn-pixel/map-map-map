@@ -95,20 +95,31 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
 }) => {
   const pos =
     config.layoutPositions?.[elementKey] ||
-    DEFAULT_LAYOUT_POSITIONS[elementKey] || { x: 0, y: 0, scale: 1 };
+    DEFAULT_LAYOUT_POSITIONS[elementKey] || {
+      x: 0,
+      y: 0,
+      scale: 1,
+      scaleX: 1,
+      scaleY: 1,
+    };
 
   const currentScale = Math.max(0.35, Math.min(2.5, pos.scale ?? 1));
+  const currentScaleX = Math.max(0.35, Math.min(3.0, pos.scaleX ?? 1));
+  const currentScaleY = Math.max(0.35, Math.min(3.0, pos.scaleY ?? 1));
 
   const dragStartRef = useRef<{
-    mode: 'move' | 'resize';
+    mode: 'move' | 'resize' | 'resize_x' | 'resize_y';
     pointerX: number;
     pointerY: number;
     startX: number;
     startY: number;
     startScale: number;
+    startScaleX: number;
+    startScaleY: number;
+    dirSign: number;
   } | null>(null);
   const [interactionMode, setInteractionMode] = useState<
-    'idle' | 'move' | 'resize'
+    'idle' | 'move' | 'resize' | 'resize_x' | 'resize_y'
   >('idle');
 
   const handleMovePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -123,6 +134,9 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
       startX: pos.x,
       startY: pos.y,
       startScale: currentScale,
+      startScaleX: currentScaleX,
+      startScaleY: currentScaleY,
+      dirSign: 1,
     };
     setInteractionMode('move');
   };
@@ -146,8 +160,37 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
       startX: pos.x,
       startY: pos.y,
       startScale: currentScale,
+      startScaleX: currentScaleX,
+      startScaleY: currentScaleY,
+      dirSign: 1,
     };
     setInteractionMode('resize');
+  };
+
+  const handleEdgeResizePointerDown = (
+    axis: 'x' | 'y',
+    dirSign: number,
+    e: React.PointerEvent<HTMLDivElement>
+  ) => {
+    if (!config.layoutEditMode || !onUpdateConfig) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const parentBox = e.currentTarget.parentElement;
+    if (parentBox) {
+      parentBox.setPointerCapture(e.pointerId);
+    }
+    dragStartRef.current = {
+      mode: axis === 'x' ? 'resize_x' : 'resize_y',
+      pointerX: e.clientX,
+      pointerY: e.clientY,
+      startX: pos.x,
+      startY: pos.y,
+      startScale: currentScale,
+      startScaleX: currentScaleX,
+      startScaleY: currentScaleY,
+      dirSign,
+    };
+    setInteractionMode(axis === 'x' ? 'resize_x' : 'resize_y');
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -171,6 +214,58 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
             x: nextX,
             y: nextY,
             scale: dragStartRef.current.startScale,
+            scaleX: dragStartRef.current.startScaleX,
+            scaleY: dragStartRef.current.startScaleY,
+          },
+        },
+      });
+    } else if (dragStartRef.current.mode === 'resize_x') {
+      const dx =
+        ((e.clientX - dragStartRef.current.pointerX) *
+          dragStartRef.current.dirSign) /
+        (scaleFactor || 1);
+      const deltaX = dx / 140;
+      const nextScaleX = Number(
+        Math.max(
+          0.35,
+          Math.min(3.0, dragStartRef.current.startScaleX + deltaX)
+        ).toFixed(2)
+      );
+      onUpdateConfig({
+        layoutPositions: {
+          ...DEFAULT_LAYOUT_POSITIONS,
+          ...(config.layoutPositions || {}),
+          [elementKey]: {
+            x: dragStartRef.current.startX,
+            y: dragStartRef.current.startY,
+            scale: dragStartRef.current.startScale,
+            scaleX: nextScaleX,
+            scaleY: dragStartRef.current.startScaleY,
+          },
+        },
+      });
+    } else if (dragStartRef.current.mode === 'resize_y') {
+      const dy =
+        ((e.clientY - dragStartRef.current.pointerY) *
+          dragStartRef.current.dirSign) /
+        (scaleFactor || 1);
+      const deltaY = dy / 140;
+      const nextScaleY = Number(
+        Math.max(
+          0.35,
+          Math.min(3.0, dragStartRef.current.startScaleY + deltaY)
+        ).toFixed(2)
+      );
+      onUpdateConfig({
+        layoutPositions: {
+          ...DEFAULT_LAYOUT_POSITIONS,
+          ...(config.layoutPositions || {}),
+          [elementKey]: {
+            x: dragStartRef.current.startX,
+            y: dragStartRef.current.startY,
+            scale: dragStartRef.current.startScale,
+            scaleX: dragStartRef.current.startScaleX,
+            scaleY: nextScaleY,
           },
         },
       });
@@ -198,6 +293,8 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
             x: dragStartRef.current.startX,
             y: dragStartRef.current.startY,
             scale: nextScale,
+            scaleX: dragStartRef.current.startScaleX,
+            scaleY: dragStartRef.current.startScaleY,
           },
         },
       });
@@ -216,6 +313,9 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
     setInteractionMode('idle');
   };
 
+  const finalScaleX = Number((currentScale * currentScaleX).toFixed(3));
+  const finalScaleY = Number((currentScale * currentScaleY).toFixed(3));
+
   return (
     <div
       onPointerDown={handleMovePointerDown}
@@ -229,7 +329,7 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
       style={{
         ...baseStyle,
         transformOrigin,
-        transform: `translate3d(${pos.x}px, ${pos.y}px, 0px) scale(${currentScale})`,
+        transform: `translate3d(${pos.x}px, ${pos.y}px, 0px) scale(${finalScaleX}, ${finalScaleY})`,
       }}
     >
       {config.layoutEditMode && (
@@ -241,22 +341,25 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
                 : 'bg-amber-400 text-stone-950'
             }`}
           >
-            ✥ {label} • {Math.round(currentScale * 100)}%
+            ✥ {label} • {Math.round(currentScale * 100)}% (W:
+            {Math.round(currentScaleX * 100)}% H:
+            {Math.round(currentScaleY * 100)}%)
           </div>
 
+          {/* 4 Nút kéo ở 4 Góc (Scale đều) */}
           <div
             onPointerDown={(e) => handleResizePointerDown(-1, -1, e)}
-            title="Kéo góc để chỉnh kích thước"
+            title="Kéo góc để chỉnh kích thước đều"
             className="absolute -top-2 -left-2 z-50 w-4 h-4 rounded-full bg-emerald-400 border-2 border-stone-950 cursor-nwse-resize shadow-md"
           />
           <div
             onPointerDown={(e) => handleResizePointerDown(1, -1, e)}
-            title="Kéo góc để chỉnh kích thước"
+            title="Kéo góc để chỉnh kích thước đều"
             className="absolute -top-2 -right-2 z-50 w-4 h-4 rounded-full bg-emerald-400 border-2 border-stone-950 cursor-nesw-resize shadow-md"
           />
           <div
             onPointerDown={(e) => handleResizePointerDown(-1, 1, e)}
-            title="Kéo góc để chỉnh kích thước"
+            title="Kéo góc để chỉnh kích thước đều"
             className="absolute -bottom-2 -left-2 z-50 w-4 h-4 rounded-full bg-emerald-400 border-2 border-stone-950 cursor-nesw-resize shadow-md"
           />
           <div
@@ -265,6 +368,36 @@ const DraggableLayoutBox: React.FC<DraggableBoxProps> = ({
             className="absolute -bottom-2.5 -right-2.5 z-50 w-5 h-5 rounded-full bg-emerald-400 border-2 border-stone-950 cursor-nwse-resize shadow-lg flex items-center justify-center text-[9px] font-black text-stone-950"
           >
             ⤡
+          </div>
+
+          {/* 4 Thanh kéo ở 4 Cạnh (Kéo dài ngang / dọc riêng biệt) */}
+          <div
+            onPointerDown={(e) => handleEdgeResizePointerDown('x', 1, e)}
+            title="Kéo cạnh phải để chỉnh chiều dài ngang"
+            className="absolute top-1/2 -right-2 -translate-y-1/2 z-50 w-3 h-7 rounded-full bg-cyan-400 border border-stone-950 cursor-ew-resize shadow flex items-center justify-center text-[8px] font-black text-stone-950"
+          >
+            ↔
+          </div>
+          <div
+            onPointerDown={(e) => handleEdgeResizePointerDown('x', -1, e)}
+            title="Kéo cạnh trái để chỉnh chiều dài ngang"
+            className="absolute top-1/2 -left-2 -translate-y-1/2 z-50 w-3 h-7 rounded-full bg-cyan-400 border border-stone-950 cursor-ew-resize shadow flex items-center justify-center text-[8px] font-black text-stone-950"
+          >
+            ↔
+          </div>
+          <div
+            onPointerDown={(e) => handleEdgeResizePointerDown('y', 1, e)}
+            title="Kéo cạnh dưới để chỉnh chiều dọc"
+            className="absolute -bottom-2 left-1/2 -translate-x-1/2 z-50 w-7 h-3 rounded-full bg-cyan-400 border border-stone-950 cursor-ns-resize shadow flex items-center justify-center text-[8px] font-black text-stone-950"
+          >
+            ↕
+          </div>
+          <div
+            onPointerDown={(e) => handleEdgeResizePointerDown('y', -1, e)}
+            title="Kéo cạnh trên để chỉnh chiều dọc"
+            className="absolute -top-2 left-1/2 -translate-x-1/2 z-50 w-7 h-3 rounded-full bg-cyan-400 border border-stone-950 cursor-ns-resize shadow flex items-center justify-center text-[8px] font-black text-stone-950"
+          >
+            ↕
           </div>
         </>
       )}
@@ -343,19 +476,29 @@ export const GameStage: React.FC<GameStageProps> = ({
   roundCounterRef.current = roundCounter;
 
   const isSummaryActive = Boolean(sessionEndSummary);
+  const wasSummaryActiveRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (isSummaryActive) {
-      // Trong lúc đang hiển thị bảng tổng kết cuối phiên & đọc Top 3, tạm dừng đếm ngược phiên mới
+      wasSummaryActiveRef.current = true;
+      secondsLeftRef.current = 0;
+      setSecondsLeft(0);
       return;
     }
+
+    if (wasSummaryActiveRef.current) {
+      // Ngay khi người đọc đọc xong hết tổng kết và đóng bảng tổng kết -> Bắt đầu đếm ngược phiên mới!
+      wasSummaryActiveRef.current = false;
+      secondsLeftRef.current = effectiveDuration;
+      setSecondsLeft(effectiveDuration);
+    }
+
     const timer = setInterval(() => {
       const currentSec = secondsLeftRef.current;
       if (currentSec <= 1) {
         const finishedSession = roundCounterRef.current;
-        secondsLeftRef.current = effectiveDuration;
-        setSecondsLeft(effectiveDuration);
-        setRoundCounter((r) => r + 1);
+        secondsLeftRef.current = 0;
+        setSecondsLeft(0);
         if (onSessionTimeUpRef.current) {
           onSessionTimeUpRef.current(finishedSession);
         }
@@ -401,7 +544,7 @@ export const GameStage: React.FC<GameStageProps> = ({
     };
   }, [provinces]);
 
-  // Top 5 tỉnh cao điểm nhất
+  // Top 5 tỉnh cao điểm nhất trong phiên hiện tại
   const top5Provinces = useMemo(() => {
     const sorted = [...provinces].sort((a, b) => {
       if (b.points !== a.points) return b.points - a.points;
@@ -410,7 +553,17 @@ export const GameStage: React.FC<GameStageProps> = ({
     return sorted.slice(0, 5);
   }, [provinces]);
 
-  const top3Provinces = useMemo(() => top5Provinces.slice(0, 3), [top5Provinces]);
+  // Danh sách 3 tỉnh đạt Top 1 nhiều nhất (đếm số lần đạt Top 1 qua các phiên, nếu bằng nhau xét điểm hiện tại)
+  const top3MostTop1Provinces = useMemo(() => {
+    const sorted = [...provinces].sort((a, b) => {
+      const winA = a.top1WinCount || 0;
+      const winB = b.top1WinCount || 0;
+      if (winB !== winA) return winB - winA;
+      if (b.points !== a.points) return b.points - a.points;
+      return a.code - b.code;
+    });
+    return sorted.slice(0, 3);
+  }, [provinces]);
 
   // Các tỉnh có điểm > 0 được sắp xếp theo tọa độ Y để chống chồng lấp nhãn trên Map mặc định
   const overviewLabels = useMemo(() => {
@@ -815,7 +968,7 @@ export const GameStage: React.FC<GameStageProps> = ({
                     const isFocused = cameraFocus.provinceId === prov.id;
                     const hasPoints = prov.points > 0;
                     const isTop1 =
-                      top3Provinces[0]?.id === prov.id && prov.points > 0;
+                      top5Provinces[0]?.id === prov.id && prov.points > 0;
 
                     const baseCreamFill =
                       prov.code % 2 === 0 ? '#fef5cc' : '#fde89e';
@@ -1449,9 +1602,7 @@ export const GameStage: React.FC<GameStageProps> = ({
                   <div className="h-[50px] px-4 rounded-xl bg-[#11313a]/90 border border-[#245562]/70 backdrop-blur-md flex items-center justify-between shadow-lg">
                     <div className="flex items-baseline gap-1.5">
                       <span className="text-[15px] font-bold text-[#cbe0e5]">
-                        {config.gamePlayMode === 'session_top5'
-                          ? config.sessionTitle || 'Vòng gặp gỡ'
-                          : 'Vòng gặp gỡ'}
+                        {config.sessionTitle || 'Vòng gặp gỡ'}
                       </span>
                       <span className="text-xs font-semibold text-[#7da3ad]">
                         #{roundCounter}
@@ -1654,7 +1805,7 @@ export const GameStage: React.FC<GameStageProps> = ({
                 </DraggableLayoutBox>
               )}
 
-              {/* (B) Thẻ Xếp Hạng Dạng Biểu Đồ Cột Đơn Giản - Top 5 Tỉnh */}
+              {/* (B) Thẻ Xếp Hạng Dạng Biểu Đồ Cột Đơn Giản - Top 5 Tỉnh (Tăng size số điểm + tên tỉnh 1 từ 1 hàng) */}
               {isElementVisible('sessionBarChartCard') && (
                 <DraggableLayoutBox
                   elementKey="sessionBarChartCard"
@@ -1665,12 +1816,12 @@ export const GameStage: React.FC<GameStageProps> = ({
                   onUpdateConfig={onUpdateConfig}
                   baseClassName="absolute right-3.5 top-[148px] z-30"
                 >
-                  <div className="p-2.5 rounded-xl bg-[#0d2b33]/92 border border-[#245562]/80 backdrop-blur-md shadow-xl w-[224px]">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[9.5px] font-extrabold uppercase tracking-wider text-amber-300">
+                  <div className="p-3 rounded-xl bg-[#0d2b33]/92 border border-[#245562]/80 backdrop-blur-md shadow-xl w-[262px]">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10.5px] font-extrabold uppercase tracking-wider text-amber-300">
                         📊 BXH Top 5 Tỉnh Phiên
                       </span>
-                      <span className="text-[8.5px] font-semibold text-teal-200/80">
+                      <span className="text-[9px] font-semibold text-teal-200/80">
                         Top 1–5
                       </span>
                     </div>
@@ -1689,31 +1840,35 @@ export const GameStage: React.FC<GameStageProps> = ({
                       ];
 
                       return (
-                        <div className="grid grid-cols-5 gap-1.5 items-end h-[88px] pt-3 px-0.5">
+                        <div className="grid grid-cols-5 gap-2 items-end pt-1 px-0.5">
                           {top5Provinces.map((prov, idx) => {
                             const heightPct =
                               prov.points > 0
                                 ? Math.max(
-                                    18,
+                                    20,
                                     Math.round((prov.points / maxPts) * 100)
                                   )
-                                : 10;
+                                : 12;
                             const shortLabel = prov.name
                               .replace(/^TP\.\s*/i, '')
-                              .replace('Hồ Chí Minh', 'HCM');
+                              .replace('Hồ Chí Minh', 'HCM')
+                              .trim();
+                            const words = shortLabel.split(/\s+/);
 
                             return (
                               <div
                                 key={prov.id}
-                                className="flex flex-col items-center justify-end h-full"
+                                className="flex flex-col items-center justify-end"
                               >
-                                <span className="text-[9.5px] font-mono font-black text-white leading-none mb-1 tabular-nums drop-shadow">
+                                {/* Số điểm to rõ phía trên cột */}
+                                <span className="text-[14px] font-mono font-black text-amber-200 leading-none mb-1.5 tabular-nums drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]">
                                   {prov.points}
                                 </span>
 
-                                <div className="w-full flex-1 flex items-end justify-center">
+                                {/* Cột biểu đồ */}
+                                <div className="w-full h-[76px] flex items-end justify-center">
                                   <div
-                                    className="w-6 rounded-t-md border border-white/25 shadow-sm transition-all duration-500"
+                                    className="w-7 rounded-t-md border border-white/30 shadow-md transition-all duration-500"
                                     style={{
                                       height: `${heightPct}%`,
                                       background:
@@ -1722,9 +1877,14 @@ export const GameStage: React.FC<GameStageProps> = ({
                                   />
                                 </div>
 
-                                <span className="mt-1 text-[8px] font-bold text-teal-100 truncate max-w-[40px] text-center leading-tight">
-                                  {shortLabel}
-                                </span>
+                                {/* Tên tỉnh: 1 từ 1 hàng, chữ to rõ */}
+                                <div className="mt-1.5 min-h-[34px] flex flex-col items-center justify-start text-[11px] font-extrabold text-white text-center leading-[1.12] tracking-tight drop-shadow">
+                                  {words.map((word, wIdx) => (
+                                    <span key={wIdx} className="block">
+                                      {word}
+                                    </span>
+                                  ))}
+                                </div>
                               </div>
                             );
                           })}
@@ -1738,24 +1898,39 @@ export const GameStage: React.FC<GameStageProps> = ({
           )}
 
           {/* =====================================================================
-              7. KHUNG BỤC TOP 3 TỈNH DẪN ĐẦU Ở ĐÁY MÀN HÌNH (01, 02, 03)
+              7. DANH SÁCH TỈNH ĐẠT TOP 1 NHIỀU NHẤT Ở ĐÁY MÀN HÌNH (ĐẾM SỐ LẦN TOP 1)
              ===================================================================== */}
           {isElementVisible('bottomPodium') && (
             <DraggableLayoutBox
               elementKey="bottomPodium"
-              label="Bục Top 3 Tỉnh Dẫn Đầu"
+              label="Danh Sách Tỉnh Đạt Top 1 Nhiều Nhất"
               config={config}
               scaleFactor={stageScale}
               transformOrigin="bottom center"
               onUpdateConfig={onUpdateConfig}
               baseClassName="absolute left-3.5 right-3.5 bottom-4 z-30"
             >
-              <div className="p-3.5 rounded-2xl bg-[#0c262e]/92 border border-[#1d4955]/80 backdrop-blur-md shadow-2xl">
+              <div className="p-3.5 rounded-2xl bg-[#0c262e]/92 border border-[#1d4955]/80 backdrop-blur-md shadow-2xl space-y-2.5">
+                {/* Tiêu đề Danh sách tỉnh đạt Top 1 nhiều nhất */}
+                <div className="flex items-center justify-between border-b border-teal-800/70 pb-1.5 px-1">
+                  <span className="text-[11.5px] font-black uppercase tracking-wider text-amber-300 drop-shadow">
+                    🏆{' '}
+                    {config.podiumTitle ||
+                      'DANH SÁCH TỈNH ĐẠT TOP 1 NHIỀU NHẤT'}
+                  </span>
+                  <span className="text-[9.5px] font-bold text-teal-200/85">
+                    Đếm số lần Top 1
+                  </span>
+                </div>
+
                 <div className="grid grid-cols-3 gap-3.5">
                   {[0, 1, 2].map((rankIdx) => {
-                    const prov = top3Provinces[rankIdx];
+                    const prov = top3MostTop1Provinces[rankIdx];
                     const rankLabel = `0${rankIdx + 1}`;
-                    const shortName = prov
+                    const winCount = prov?.top1WinCount || 0;
+                    const hasAnyRecord =
+                      prov && (winCount > 0 || prov.points > 0);
+                    const shortName = hasAnyRecord
                       ? prov.name.replace(/^TP\.\s*/i, '')
                       : 'Chưa có';
 
@@ -1786,21 +1961,22 @@ export const GameStage: React.FC<GameStageProps> = ({
                     return (
                       <div key={rankIdx} className="flex flex-col items-center">
                         <div
-                          className="relative w-[108px] h-[96px] rounded-xl shadow-inner border border-white/20 flex flex-col items-center justify-center overflow-hidden"
+                          className="relative w-[108px] h-[96px] rounded-xl shadow-inner border border-white/20 flex flex-col items-center justify-center overflow-hidden px-1"
                           style={{ background: cardGradient }}
                         >
-                          {prov && prov.points > 0 ? (
-                            <>
-                              <span className="text-xl font-black text-white/95 drop-shadow">
-                                {prov.points}
-                              </span>
-                              <span className="text-[9.5px] font-bold uppercase tracking-wider text-white/80">
-                                điểm
-                              </span>
-                            </>
-                          ) : null}
+                          <span className="text-2xl font-black text-white drop-shadow leading-none">
+                            {winCount}
+                          </span>
+                          <span className="mt-1 text-[9.5px] font-extrabold uppercase tracking-wider text-amber-100 bg-black/30 px-2 py-0.5 rounded-full">
+                            lần Top 1
+                          </span>
+                          {prov && prov.points > 0 && (
+                            <span className="mt-1 text-[9px] font-bold text-white/90">
+                              Phiên này: {prov.points}đ
+                            </span>
+                          )}
 
-                          <div className="absolute right-2 bottom-2 w-6 h-6 rounded-full bg-white/25 border border-white/40 overflow-hidden flex items-center justify-center">
+                          <div className="absolute right-1.5 bottom-1.5 w-6 h-6 rounded-full bg-white/25 border border-white/40 overflow-hidden flex items-center justify-center">
                             {resolvedTopAvatar ? (
                               <img
                                 src={resolvedTopAvatar}
@@ -1831,24 +2007,27 @@ export const GameStage: React.FC<GameStageProps> = ({
           )}
 
           {/* =====================================================================
-              8. LUỒNG THÔNG BÁO KẾT QUẢ PHIÊN & VINH DANH TOP 3 TỈNH ĐẠT ĐIỂM CAO NHẤT
+              8. LUỒNG THÔNG BÁO KẾT QUẢ PHIÊN & VINH DANH TOP 3 TỈNH + NGƯỜI TẶNG NHIỀU NHẤT
                  - Hiển thị khi hết giờ chơi của phiên
-                 - Trong lúc này những hàng chờ quà còn tồn đọng chưa đọc được bảo lưu đẩy sang phiên sau!
+                 - Đọc xong tổng kết sẽ tự động chuyển ngay vào vòng mới (ưu tiên theo người đọc)
              ===================================================================== */}
           {sessionEndSummary && (
             <div className="absolute inset-0 z-50 bg-stone-950/85 backdrop-blur-md flex items-center justify-center p-5">
-              <div className="w-full rounded-2xl bg-[#0c262e] border-2 border-amber-400/90 p-5 shadow-2xl space-y-4 text-center">
-                <div>
-                  <span className="px-3 py-0.5 rounded-full bg-amber-400 text-stone-950 text-[10.5px] font-black uppercase tracking-wider shadow">
-                    Thông Báo Kết Quả Phiên #{sessionEndSummary.sessionNum}
+              <div className="w-full max-w-[460px] rounded-2xl bg-[#0c262e] border-2 border-amber-400/90 p-4 shadow-2xl space-y-3 text-center">
+                <div className="flex flex-col items-center gap-1">
+                  <span className="px-2.5 py-0.5 rounded-full bg-amber-400 text-stone-950 text-[10px] font-black uppercase tracking-wider shadow">
+                    {sessionEndSummary.sessionTitle ||
+                      config.sessionTitle ||
+                      'Phiên Chơi'}{' '}
+                    #{sessionEndSummary.sessionNum}
                   </span>
-                  <h3 className="mt-2 text-lg font-black text-white uppercase tracking-wide">
-                    🏆 Tổng Kết Top 3 Tỉnh Dẫn Đầu Phiên
+                  <h3 className="text-base font-black text-white uppercase tracking-wider">
+                    🏆 TỔNG KẾT TOP 3
                   </h3>
                 </div>
 
-                {/* Bục Top 3 tỉnh nổi bật */}
-                <div className="grid grid-cols-3 gap-2.5 pt-1">
+                {/* Bục Top 3 tỉnh gọn gàng kèm tên người đóng góp nhiều nhất */}
+                <div className="grid grid-cols-3 gap-2">
                   {sessionEndSummary.top3.map((prov, idx) => {
                     const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉';
                     const cardStyle =
@@ -1862,79 +2041,40 @@ export const GameStage: React.FC<GameStageProps> = ({
                     return (
                       <div
                         key={prov.id}
-                        className={`p-3 rounded-xl border-2 flex flex-col items-center justify-between space-y-1.5 shadow-lg ${cardStyle}`}
+                        className={`p-2.5 rounded-xl border-2 flex flex-col items-center justify-between space-y-1 shadow-lg ${cardStyle}`}
                       >
-                        <div className="text-xl leading-none">{medal}</div>
-                        <div className="text-[10px] font-black uppercase tracking-wider opacity-85">
-                          Hạng 0{idx + 1}
-                        </div>
-                        <div className="text-sm font-black text-white truncate max-w-full">
+                        <div className="text-lg leading-none">{medal}</div>
+                        <div className="text-[13px] font-black text-white truncate max-w-full">
                           {prov.name.replace(/^TP\.\s*/i, '')}
                         </div>
-                        <div className="px-2 py-0.5 rounded-full bg-stone-950/80 font-mono text-xs font-black text-amber-300">
-                          {prov.points} điểm
+                        <div className="px-2 py-0.5 rounded-full bg-stone-950/80 font-mono text-[11px] font-black text-amber-300">
+                          {prov.points}đ
                         </div>
                         {topUser && (
-                          <div className="flex items-center gap-1 pt-0.5 max-w-full">
-                            <img
-                              src={resolveAvatarForUsername(
-                                topUser.username,
-                                topUser.avatarUrl,
-                                npcAvatars
-                              )}
-                              alt={topUser.username}
-                              referrerPolicy="no-referrer"
-                              className="w-4 h-4 rounded-full object-cover border border-white/40 shrink-0"
-                            />
-                            <span className="text-[9px] font-semibold text-stone-200 truncate">
-                              {topUser.username}
+                          <div className="w-full pt-1 border-t border-white/15 flex flex-col items-center gap-0.5">
+                            <div className="flex items-center gap-1 max-w-full">
+                              <img
+                                src={resolveAvatarForUsername(
+                                  topUser.username,
+                                  topUser.avatarUrl,
+                                  npcAvatars
+                                )}
+                                alt={topUser.username}
+                                referrerPolicy="no-referrer"
+                                className="w-3.5 h-3.5 rounded-full object-cover border border-white/40 shrink-0"
+                              />
+                              <span className="text-[9.5px] font-extrabold text-white truncate">
+                                {topUser.username}
+                              </span>
+                            </div>
+                            <span className="text-[8.5px] font-mono font-bold text-emerald-300">
+                              +{topUser.pointsAdded}đ
                             </span>
                           </div>
                         )}
                       </div>
                     );
                   })}
-                </div>
-
-                {/* Hạng 4 & Hạng 5 (nếu có điểm) */}
-                {sessionEndSummary.top5.slice(3, 5).some((p) => p.points > 0) && (
-                  <div className="grid grid-cols-2 gap-2 text-left">
-                    {sessionEndSummary.top5.slice(3, 5).map((prov, idx) => (
-                      <div
-                        key={prov.id}
-                        className="px-3 py-1.5 rounded-lg bg-stone-900/80 border border-stone-700 flex items-center justify-between text-xs"
-                      >
-                        <span className="font-bold text-stone-300 truncate">
-                          #{idx + 4} {prov.name.replace(/^TP\.\s*/i, '')}
-                        </span>
-                        <span className="font-mono font-black text-amber-300 shrink-0">
-                          {prov.points}đ
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Thông báo bảo lưu hàng chờ quà sang phiên sau */}
-                {(sessionEndSummary.deferredQueueCount > 0 ||
-                  cameraQueueCount > 0) && (
-                  <div className="px-3 py-2 rounded-xl bg-emerald-950/90 border border-emerald-400/60 text-[11px] font-bold text-emerald-200">
-                    📦 Đang bảo lưu{' '}
-                    <strong className="text-amber-300">
-                      {Math.max(
-                        sessionEndSummary.deferredQueueCount,
-                        cameraQueueCount
-                      )}{' '}
-                      lượt quà
-                    </strong>{' '}
-                    còn tồn đọng chưa đọc để đẩy sang Phiên #
-                    {sessionEndSummary.sessionNum + 1}!
-                  </div>
-                )}
-
-                <div className="text-[10.5px] text-stone-300 italic">
-                  🔊 Giọng đọc AI #3 đang công bố kết quả phiên & chuẩn bị reset
-                  dữ liệu sang phiên mới...
                 </div>
               </div>
             </div>

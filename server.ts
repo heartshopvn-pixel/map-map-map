@@ -142,7 +142,8 @@ async function startServer() {
       body.type === 'comment' ||
       body.type === 'gift' ||
       body.type === 'like' ||
-      body.type === 'follow'
+      body.type === 'follow' ||
+      body.type === 'member'
     ) {
       broadcastSSE({
         type: 'TIKTOK_LIVE_EVENT',
@@ -375,10 +376,21 @@ async function startServer() {
         });
       };
 
+      const onMember = (data: any) => {
+        const username = extractTikTokUsername(data);
+        const avatarUrl = extractTikTokAvatar(data);
+        console.log(`👋 [TIKTOK MEMBER] ${username} đã vào phòng`);
+        broadcastSSE({
+          type: 'TIKTOK_LIVE_EVENT',
+          event: { type: 'member', username, avatarUrl },
+        });
+      };
+
       conn.on('chat', onChat);
       conn.on('gift', onGift);
       conn.on('like', onLike);
       conn.on('follow', onFollow);
+      conn.on('member', onMember);
       conn.on('social', (data: any) => {
         const key = String(
           data?.displayType || data?.common?.displayText?.key || ''

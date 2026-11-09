@@ -10,6 +10,14 @@ export type GamePlayMode = 'session_top5' | 'free_endless';
 
 export type MapIdleMode = 'sway' | 'pan_north_south';
 
+export type BgmPlayMode = 'loop_one' | 'next_all';
+
+export interface BgmTrackItem {
+  id: string;
+  name: string;
+  url: string;
+}
+
 export type ProvinceUnitType = 'city' | 'province';
 
 export interface ProvinceContributor {
@@ -37,6 +45,8 @@ export interface ProvinceCell {
   points: number;
   giftCount: number;
   roseCount: number;
+  /** Số lần tỉnh đạt Top 1 qua các phiên chơi */
+  top1WinCount: number;
   recentContributors: ProvinceContributor[];
   lastUpdatedAt: number;
 }
@@ -146,8 +156,12 @@ export type LayoutElementKey =
 export interface LayoutPosition {
   x: number;
   y: number;
-  /** Tỉ lệ thu phóng của bảng (mặc định 1.0), khi kéo góc nhỏ lại nội dung bên trong scale theo */
+  /** Tỉ lệ thu phóng đồng đều ở góc (mặc định 1.0), khi kéo góc nhỏ lại nội dung bên trong scale theo */
   scale?: number;
+  /** Kéo cạnh ngang để điều chỉnh chiều dài (mặc định 1.0) */
+  scaleX?: number;
+  /** Kéo cạnh dọc để điều chỉnh chiều dọc (mặc định 1.0) */
+  scaleY?: number;
 }
 
 export interface HowToPlayBoardConfig {
@@ -166,6 +180,17 @@ export interface GameConfig {
   sessionTitle: string;
   sessionAutoResetPoints: boolean;
   sessionResultHoldSec: number;
+  /** Tiêu đề bảng Danh sách tỉnh đạt Top 1 nhiều nhất */
+  podiumTitle: string;
+
+  // Nhạc nền (BGM) trong Dev Âm Thanh
+  bgmEnabled: boolean;
+  bgmPlayMode: BgmPlayMode;
+  bgmVolume: number;
+
+  // Chế độ chào người vào phòng Live
+  welcomeJoinEnabled: boolean;
+  welcomeJoinPhrases: string[];
 
   // Giọng đọc AI #3 (Node.js Local TTS + Fallback Cloud Stream)
   ttsEnabled: boolean;
@@ -179,6 +204,8 @@ export interface GameConfig {
   maxTtsQueueSize: number;
   commentGiftTtsTemplate: string;
   roseGiftTtsTemplate: string;
+  /** Câu đọc cảm ơn nhiệt tình khi người chơi gửi nhiều hoa hồng cùng lúc */
+  multiRoseGiftTtsTemplate: string;
   batchGiftTtsTemplate: string;
   /** Mẫu câu an toàn khi NPC gửi hoa hồng / quà coin hỗ trợ điểm (không nói NPC tặng quà) */
   npcSupportTtsTemplate: string;
@@ -190,6 +217,10 @@ export interface GameConfig {
   ttsRandomPhraseChancePercent: number;
   /** Danh sách các mẫu câu chào / vu vơ kèm % kích hoạt từng câu */
   ttsRandomPhrases: TtsRandomPhraseItem[];
+  /** Thỉnh thoảng chèn câu nói mời người chơi gửi hoa hồng (Format + % tỉ lệ xuất hiện) */
+  rosePromptEnabled: boolean;
+  rosePromptChancePercent: number;
+  rosePromptTemplate: string;
   sfxEnabled: boolean;
   sfxVolume: number;
 
@@ -219,7 +250,7 @@ export interface GameConfig {
   mapInternalBorderWidth: number;
   mapInternalBorderOpacity: number;
 
-  // Icon quà tặng tùy chỉnh & Layout kéo thả + thu phóng góc + ẩn/hiện từng bảng
+  // Icon quà tặng tùy chỉnh & Layout kéo thả + thu phóng góc/cạnh + ẩn/hiện từng bảng
   roseIconUrl: string;
   commentIconUrl: string;
   giftGuideItems: GiftGuideItem[];
@@ -257,6 +288,7 @@ export interface StudioBackupData {
     points: number;
     giftCount: number;
     roseCount: number;
+    top1WinCount?: number;
     recentContributors?: ProvinceContributor[];
   }>;
   npcNames?: string[];

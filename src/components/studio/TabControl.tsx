@@ -29,7 +29,9 @@ interface TabControlProps {
   onTriggerRandomGift: (
     isRose: boolean,
     specificProvinceId?: string,
-    customUsername?: string
+    customUsername?: string,
+    isNpc?: boolean,
+    roseCountOverride?: number
   ) => void;
   onTriggerBatchSameProvince: (
     provinceId?: string,
@@ -70,50 +72,66 @@ export const TabControl: React.FC<TabControlProps> = ({
     [provinces]
   );
 
-  const handleSendBySelect = (isRose: boolean) => {
+  const handleSendBySelect = (isRose: boolean, roseComboCount = 1) => {
     const prov = provinces.find((p) => p.id === selectedProvinceId);
     if (!prov) return;
     onTriggerRandomGift(
       isRose,
       prov.id,
-      testUsername.trim() || 'Người Chơi'
+      testUsername.trim() || 'Người Chơi',
+      false,
+      roseComboCount
     );
   };
 
   const handleSendFreeComment = (e: React.FormEvent) => {
     e.preventDefault();
     if (!customComment.trim()) return;
-    const matched = onSimulateComment(
-      testUsername.trim() || 'Người Chơi',
-      customComment.trim()
-    );
+    const uname = testUsername.trim() || 'Người Chơi';
+    const matched = onSimulateComment(uname, customComment.trim());
     if (matched) {
-      setFeedbackMsg(`Đã nhận diện tỉnh từ bình luận: "${customComment}"`);
+      setFeedbackMsg(
+        `✅ Đã cộng +${config.commentPoints}đ cho "${uname}" từ bình luận "${customComment}" (1 lần/phiên)`
+      );
       setCustomComment('');
     } else {
       setFeedbackMsg(
-        'Không tìm thấy tên tỉnh trong câu bình luận. Hãy gõ tên tỉnh (VD: Đà Nẵng, Lạng Sơn, Nghệ An, Hà Nội...)'
+        '⚠️ Không cộng điểm: Có thể bình luận chưa đúng tên tỉnh, hoặc người chơi này đã bình luận +1 điểm trong phiên rồi (hãy gửi Hoa Hồng để cộng không giới hạn điểm)!'
       );
     }
-    setTimeout(() => setFeedbackMsg(null), 3500);
+    setTimeout(() => setFeedbackMsg(null), 4000);
   };
 
   const currentMode: GamePlayMode = config.gamePlayMode || 'session_top5';
 
   return (
     <div className="space-y-3.5">
-      {/* 0. CHỌN CHẾ ĐỘ CHƠI ĐẦU TIÊN & TÙY CHỈNH NỘI DUNG TRONG CHẾ ĐỘ */}
+      {/* 0. CHỌN CHẾ ĐỘ CHƠI ĐẦU TIÊN, ĐẶT TÊN PHIÊN CHƠI & TÙY CHỈNH NỘI DUNG */}
       <section className="p-3 rounded-xl bg-stone-900/95 border border-emerald-500/40 space-y-2.5">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-bold text-emerald-300 flex items-center gap-1.5 uppercase tracking-wide">
             <BarChart3 className="w-3.5 h-3.5" />
-            <span>1. Chọn Chế Độ Chơi & Tùy Chỉnh Phiên</span>
+            <span>1. Chọn Chế Độ Chơi & Đặt Tên Phiên Chơi</span>
           </h2>
           <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-[10px] font-bold text-emerald-300">
             {currentMode === 'session_top5'
               ? 'Theo Phiên (Top 5)'
               : 'Tự Do Tích Lũy'}
           </span>
+        </div>
+
+        {/* Ô Đặt tên phiên chơi luôn hiển thị cho mọi chế độ */}
+        <div className="p-2.5 rounded-lg bg-stone-950 border border-amber-500/35 space-y-1">
+          <label className="block text-[10.5px] font-bold text-amber-300">
+            ✏️ Đặt Tên Phiên Chơi (Hiển thị trên thanh tiêu đề & bảng tổng kết):
+          </label>
+          <input
+            type="text"
+            value={config.sessionTitle || 'Vòng gặp gỡ'}
+            onChange={(e) => onUpdateConfig({ sessionTitle: e.target.value })}
+            placeholder="VD: Vòng gặp gỡ / Đua Top Quê Hương / Phiên Giao Lưu..."
+            className="w-full px-2.5 py-1.5 rounded-lg bg-stone-900 border border-stone-700 text-xs font-bold text-stone-100 focus:outline-none focus:border-amber-400"
+          />
         </div>
 
         <div className="grid grid-cols-2 gap-1.5">
@@ -153,7 +171,7 @@ export const TabControl: React.FC<TabControlProps> = ({
               )}
             </div>
             <p className="text-[10px] text-stone-400 mt-0.5 leading-snug">
-              Cộng dồn điểm liên tục các vòng, chỉ hiện bản đồ & Top 3
+              Cộng dồn điểm liên tục các vòng, chỉ hiện bản đồ & Top 1 nhiều nhất
             </p>
           </button>
         </div>
@@ -161,44 +179,27 @@ export const TabControl: React.FC<TabControlProps> = ({
         {/* Tùy chỉnh chi tiết khi chọn Chế độ Gửi quà theo phiên */}
         {currentMode === 'session_top5' && (
           <div className="p-2.5 rounded-lg bg-stone-950 border border-emerald-500/30 space-y-2.5">
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-[10px] text-stone-400 mb-1">
-                  Tiêu đề phiên hiển thị:
-                </label>
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-[10.5px] text-stone-300 font-semibold">
+                Thời gian mỗi phiên X (giây):
+              </label>
+              <div className="flex items-center gap-1 w-28">
+                <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                 <input
-                  type="text"
-                  value={config.sessionTitle || 'Đua Top Phiên'}
+                  type="number"
+                  min={15}
+                  max={3600}
+                  value={config.sessionDurationSec || 180}
                   onChange={(e) =>
-                    onUpdateConfig({ sessionTitle: e.target.value })
+                    onUpdateConfig({
+                      sessionDurationSec: Math.max(
+                        15,
+                        Number(e.target.value) || 60
+                      ),
+                    })
                   }
-                  placeholder="Đua Top Phiên..."
-                  className="w-full px-2 py-1 rounded bg-stone-900 border border-stone-700 text-xs text-stone-100 focus:outline-none focus:border-emerald-400"
+                  className="w-full px-2 py-1 rounded bg-stone-900 border border-stone-700 text-xs font-mono font-bold text-emerald-300 focus:outline-none focus:border-emerald-400"
                 />
-              </div>
-
-              <div>
-                <label className="block text-[10px] text-stone-400 mb-1">
-                  Thời gian mỗi phiên X (giây):
-                </label>
-                <div className="flex items-center gap-1">
-                  <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <input
-                    type="number"
-                    min={15}
-                    max={3600}
-                    value={config.sessionDurationSec || 180}
-                    onChange={(e) =>
-                      onUpdateConfig({
-                        sessionDurationSec: Math.max(
-                          15,
-                          Number(e.target.value) || 60
-                        ),
-                      })
-                    }
-                    className="w-full px-2 py-1 rounded bg-stone-900 border border-stone-700 text-xs font-mono font-bold text-emerald-300 focus:outline-none focus:border-emerald-400"
-                  />
-                </div>
               </div>
             </div>
 
@@ -243,7 +244,7 @@ export const TabControl: React.FC<TabControlProps> = ({
                   }
                   className="accent-emerald-500 rounded cursor-pointer"
                 />
-                <span>Hết phiên: Đọc Top 3 & Reset dữ liệu</span>
+                <span>Đọc xong tổng kết ➔ Chuyển sang phiên mới</span>
               </label>
 
               {onTriggerSessionEndNow && (
@@ -260,15 +261,15 @@ export const TabControl: React.FC<TabControlProps> = ({
         )}
       </section>
 
-      {/* 1. Test nhanh Gửi Quà (+1đ), Gửi Hoa Hồng (+5đ) & Gom Nhiều Người */}
+      {/* 1. Test nhanh Đến Tỉnh (+1đ, 1 lần/phiên), Gửi Hoa Hồng (+5đ) & Combo Nhiều Hoa */}
       <section className="p-3 rounded-xl bg-stone-900/90 border border-amber-500/40 space-y-2.5">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
             <Gift className="w-3.5 h-3.5" />
-            <span>2. Điều Khiển Gửi Quà Về Tỉnh</span>
+            <span>2. Điều Khiển Đến Tỉnh & Gửi Hoa Hồng</span>
           </h2>
-          <span className="text-[10.5px] font-mono text-stone-400">
-            28 Tỉnh · 6 TP • Hoàng Sa & Trường Sa
+          <span className="text-[10px] font-mono text-emerald-300">
+            Comment: 1 lần/phiên • Hoa: Vô hạn
           </span>
         </div>
 
@@ -297,7 +298,7 @@ export const TabControl: React.FC<TabControlProps> = ({
             >
               {provinces.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} ({p.points}đ)
+                  {p.name} ({p.points}đ • Top1: {p.top1WinCount || 0})
                 </option>
               ))}
             </select>
@@ -307,22 +308,35 @@ export const TabControl: React.FC<TabControlProps> = ({
         <div className="grid grid-cols-2 gap-2 pt-1">
           <button
             type="button"
-            onClick={() => handleSendBySelect(false)}
+            onClick={() => handleSendBySelect(false, 1)}
             className="px-3 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition whitespace-nowrap"
           >
             <Gift className="w-3.5 h-3.5" />
-            <span>Gửi Quà (+{config.commentPoints}đ)</span>
+            <span>Bình luận (+{config.commentPoints}đ • 1 lần)</span>
           </button>
 
           <button
             type="button"
-            onClick={() => handleSendBySelect(true)}
+            onClick={() => handleSendBySelect(true, 1)}
             className="px-3 py-2 rounded-lg bg-rose-500 hover:bg-rose-400 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition whitespace-nowrap"
           >
             <Flower2 className="w-3.5 h-3.5" />
-            <span>Gửi Hoa Hồng (+{config.rosePoints}đ)</span>
+            <span>Tặng 1 Hoa (+{config.rosePoints}đ)</span>
           </button>
         </div>
+
+        {/* Nút Test Gửi Nhiều Hoa Hồng (Đọc câu cảm ơn nhiệt tình) */}
+        <button
+          type="button"
+          onClick={() => handleSendBySelect(true, 5)}
+          className="w-full py-2 px-3 rounded-lg bg-gradient-to-r from-rose-600 to-amber-500 hover:from-rose-500 hover:to-amber-400 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition shadow"
+        >
+          <Flower2 className="w-3.5 h-3.5" />
+          <span>
+            🌹×5 Gửi Combo 5 Hoa Hồng (+{(config.rosePoints || 5) * 5}đ • Đọc
+            Cảm Ơn Nhiệt Tình)
+          </span>
+        </button>
 
         {/* Nút Test Gom Nhiều Người Cùng Tặng Về 1 Tỉnh */}
         <button

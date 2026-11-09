@@ -1,5 +1,13 @@
-import { DEFAULT_TTS_RANDOM_PHRASES } from '../config/constants';
-import { CameraFocusReason, GameConfig } from '../types/game';
+import {
+  DEFAULT_TTS_RANDOM_PHRASES,
+  DEFAULT_WELCOME_JOIN_PHRASES,
+} from '../config/constants';
+import {
+  BgmPlayMode,
+  BgmTrackItem,
+  CameraFocusReason,
+  GameConfig,
+} from '../types/game';
 
 export type TTSStatusListener = (
   statusText: string,
@@ -25,7 +33,18 @@ export interface TTSQueueItem {
   isPriority: boolean;
   addedAt: number;
   meta?: TTSQueueItemMeta;
+  onDone?: () => void;
 }
+
+export interface BgmStateSnapshot {
+  tracks: BgmTrackItem[];
+  currentIndex: number;
+  isPlaying: boolean;
+  playMode: BgmPlayMode;
+  volume: number;
+}
+
+export type BgmStateListener = (snapshot: BgmStateSnapshot) => void;
 
 export interface TtsVoiceDiagnosticIncident {
   id: string;
@@ -79,9 +98,77 @@ export function sanitizeAndLimitSpeechText(
 
   if (!cleaned) return '';
   const words = cleaned.split(/\s+/).filter(Boolean);
-  const limit = Math.max(5, Math.min(120, Number(maxWords) || 45));
+  const limit = Math.max(5, Math.min(220, Number(maxWords) || 45));
   return words.slice(0, limit).join(' ');
 }
+
+/**
+ * Tách câu văn dài thành các đoạn ngắn <= maxChars ký tự theo dấu chấm, phẩy hoặc khoảng trắng
+ * để Google TTS / Node TTS không bao giờ cắt cụt câu ở giới hạn 200 ký tự.
+ */
+function splitSpeechIntoChunks(text: string, maxChars = 165): string[] {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
+  if (clean.length <= maxChars) return [clean];
+
+  const rawSentences = clean
+    .split(/(?<=[.!?;])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const chunks: string[] = [];
+  for (const sentence of rawSentences) {
+    if (sentence.length <= maxChars) {
+      if (
+        chunks.length > 0 &&
+        chunks[chunks.length - 1].length + 1 + sentence.length <= maxChars
+      ) {
+        chunks[chunks.length - 1] = `${chunks[chunks.length - 1]} ${sentence}`;
+      } else {
+        chunks.push(sentence);
+      }
+      continue;
+    }
+
+    // Nếu 1 câu vẫn dài hơn maxChars, tách tiếp theo dấu phẩy hoặc khoảng trắng
+    const clauses = sentence
+      .split(/(?<=,)\s+/)
+      .map((c) => c.trim())
+      .filter(Boolean);
+    let current = '';
+    for (const clause of clauses) {
+      if (clause.length <= maxChars) {
+        if (current && current.length + 1 + clause.length <= maxChars) {
+          current = `${current} ${clause}`;
+        } else {
+          if (current) chunks.push(current);
+          current = clause;
+        }
+      } else {
+        if (current) {
+          chunks.push(current);
+          current = '';
+        }
+        const words = clause.split(/\s+/);
+        let wordBuf = '';
+        for (const w of words) {
+          if (wordBuf && wordBuf.length + 1 + w.length > maxChars) {
+            chunks.push(wordBuf);
+            wordBuf = w;
+          } else {
+            wordBuf = wordBuf ? `${wordBuf} ${w}` : w;
+          }
+        }
+        if (wordBuf) current = wordBuf;
+      }
+    }
+    if (current) chunks.push(current);
+  }
+
+  return chunks.length > 0 ? chunks : [clean.slice(0, maxChars)];
+}
+
+const STORAGE_BGM_TRACKS_KEY = 'province_gift_bgm_tracks_v1';
 
 class SoundService {
   private ctx: AudioContext | null = null;
@@ -94,7 +181,17 @@ class SoundService {
   private mutedSimTimer: ReturnType<typeof setTimeout> | null = null;
   private statusListeners = new Set<TTSStatusListener>();
   private queueListeners = new Set<EventTtsQueueListener>();
+  private bgmListeners = new Set<BgmStateListener>();
   private latestConfig: GameConfig | null = null;
+  private lastWelcomeJoinAt = 0;
+
+  // Trình phát Nhạc Nền (BGM) trong Dev Âm Thanh
+  private bgmTracks: BgmTrackItem[] = [];
+  private currentBgmIndex = 0;
+  private isBgmPlaying = false;
+  private bgmPlayMode: BgmPlayMode = 'next_all';
+  private bgmVolume = 0.35;
+  private bgmAudio: HTMLAudioElement | null = null;
 
   private audioBlobCache = new Map<string, string>();
   private audioBlobMetaCache = new Map<
@@ -138,6 +235,20 @@ class SoundService {
 
   constructor() {
     if (typeof window !== 'undefined') {
+      try {
+        const savedTracks = localStorage.getItem(STORAGE_BGM_TRACKS_KEY);
+        if (savedTracks) {
+          const parsed = JSON.parse(savedTracks);
+          if (Array.isArray(parsed)) {
+            this.bgmTracks = parsed.filter(
+              (t) => t && typeof t.name === 'string' && typeof t.url === 'string'
+            );
+          }
+        }
+      } catch {
+        // Ignore
+      }
+
       const unlockAudio = () => {
         try {
           if (this.ctx && this.ctx.state === 'suspended') {
@@ -150,6 +261,270 @@ class SoundService {
       window.addEventListener('pointerdown', unlockAudio, { passive: true });
       window.addEventListener('keydown', unlockAudio, { passive: true });
     }
+  }
+
+  private saveBgmTracksToStorage() {
+    try {
+      // Lưu các bài nhạc (ưu tiên URL và Data URL vừa phải) để giữ danh sách nhạc nền
+      const serializable = this.bgmTracks.filter(
+        (t) => !t.url.startsWith('blob:') && t.url.length < 4 * 1024 * 1024
+      );
+      localStorage.setItem(
+        STORAGE_BGM_TRACKS_KEY,
+        JSON.stringify(serializable)
+      );
+    } catch {
+      // Ignore quota errors for large files
+    }
+  }
+
+  public getBgmSnapshot(): BgmStateSnapshot {
+    return {
+      tracks: [...this.bgmTracks],
+      currentIndex: this.currentBgmIndex,
+      isPlaying: this.isBgmPlaying,
+      playMode: this.bgmPlayMode,
+      volume: this.bgmVolume,
+    };
+  }
+
+  public subscribeBgmState(fn: BgmStateListener) {
+    this.bgmListeners.add(fn);
+    fn(this.getBgmSnapshot());
+    return () => this.bgmListeners.delete(fn);
+  }
+
+  private emitBgmState() {
+    const snap = this.getBgmSnapshot();
+    this.bgmListeners.forEach((fn) => fn(snap));
+  }
+
+  public addBgmFiles(fileList: FileList | File[]) {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
+    const added: BgmTrackItem[] = files.map((file) => {
+      const blobUrl = URL.createObjectURL(file);
+      return {
+        id: `bgm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        name: file.name.replace(/\.[^/.]+$/, ''),
+        url: blobUrl,
+      };
+    });
+
+    const wasEmpty = this.bgmTracks.length === 0;
+    this.bgmTracks = [...this.bgmTracks, ...added];
+    if (wasEmpty) {
+      this.currentBgmIndex = 0;
+      this.playBgmTrackAt(0);
+    } else {
+      this.emitBgmState();
+    }
+  }
+
+  public addBgmUrl(name: string, url: string) {
+    const cleanUrl = url.trim();
+    if (!cleanUrl) return;
+    const item: BgmTrackItem = {
+      id: `bgm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      name: name.trim() || `Nhạc nền #${this.bgmTracks.length + 1}`,
+      url: cleanUrl,
+    };
+    const wasEmpty = this.bgmTracks.length === 0;
+    this.bgmTracks = [...this.bgmTracks, item];
+    this.saveBgmTracksToStorage();
+    if (wasEmpty) {
+      this.currentBgmIndex = 0;
+      this.playBgmTrackAt(0);
+    } else {
+      this.emitBgmState();
+    }
+  }
+
+  public removeBgmTrack(id: string) {
+    const idx = this.bgmTracks.findIndex((t) => t.id === id);
+    if (idx === -1) return;
+    const removed = this.bgmTracks[idx];
+    if (removed.url.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(removed.url);
+      } catch {
+        // Ignore
+      }
+    }
+    const nextTracks = this.bgmTracks.filter((t) => t.id !== id);
+    this.bgmTracks = nextTracks;
+    this.saveBgmTracksToStorage();
+
+    if (nextTracks.length === 0) {
+      this.stopBgmAudio();
+      this.currentBgmIndex = 0;
+      this.emitBgmState();
+      return;
+    }
+
+    if (idx === this.currentBgmIndex) {
+      const nextIdx = idx % nextTracks.length;
+      this.currentBgmIndex = nextIdx;
+      if (this.isBgmPlaying) {
+        this.playBgmTrackAt(nextIdx);
+      } else {
+        this.emitBgmState();
+      }
+    } else if (idx < this.currentBgmIndex) {
+      this.currentBgmIndex = Math.max(0, this.currentBgmIndex - 1);
+      this.emitBgmState();
+    } else {
+      this.emitBgmState();
+    }
+  }
+
+  public clearAllBgmTracks() {
+    for (const t of this.bgmTracks) {
+      if (t.url.startsWith('blob:')) {
+        try {
+          URL.revokeObjectURL(t.url);
+        } catch {
+          // Ignore
+        }
+      }
+    }
+    this.bgmTracks = [];
+    this.currentBgmIndex = 0;
+    this.stopBgmAudio();
+    this.saveBgmTracksToStorage();
+    this.emitBgmState();
+  }
+
+  private stopBgmAudio() {
+    this.isBgmPlaying = false;
+    if (this.bgmAudio) {
+      try {
+        this.bgmAudio.onended = null;
+        this.bgmAudio.onerror = null;
+        this.bgmAudio.pause();
+        this.bgmAudio.removeAttribute('src');
+        this.bgmAudio = null;
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
+  public playBgmTrackAt(index: number) {
+    if (this.bgmTracks.length === 0) {
+      this.stopBgmAudio();
+      this.emitBgmState();
+      return;
+    }
+    const safeIdx =
+      ((index % this.bgmTracks.length) + this.bgmTracks.length) %
+      this.bgmTracks.length;
+    this.currentBgmIndex = safeIdx;
+    const track = this.bgmTracks[safeIdx];
+
+    if (this.bgmAudio) {
+      try {
+        this.bgmAudio.onended = null;
+        this.bgmAudio.onerror = null;
+        this.bgmAudio.pause();
+      } catch {
+        // Ignore
+      }
+    }
+
+    const audio = new Audio(track.url);
+    audio.volume = this.isTabMuted()
+      ? 0
+      : Math.max(0, Math.min(1, this.bgmVolume));
+    audio.loop = this.bgmPlayMode === 'loop_one';
+
+    audio.onended = () => {
+      if (this.bgmTracks.length === 0) return;
+      if (this.bgmPlayMode === 'loop_one') {
+        audio.currentTime = 0;
+        audio.play().catch(() => {});
+      } else {
+        // Chế độ Next: Chuyển sang bài kế tiếp, tới bài cuối thì tự động quay lại bài đầu tiên (index 0)
+        const nextIdx = (this.currentBgmIndex + 1) % this.bgmTracks.length;
+        this.playBgmTrackAt(nextIdx);
+      }
+    };
+
+    audio.onerror = () => {
+      if (this.bgmTracks.length > 1) {
+        const nextIdx = (this.currentBgmIndex + 1) % this.bgmTracks.length;
+        this.playBgmTrackAt(nextIdx);
+      } else {
+        this.isBgmPlaying = false;
+        this.emitBgmState();
+      }
+    };
+
+    this.bgmAudio = audio;
+    this.isBgmPlaying = true;
+    this.emitBgmState();
+
+    audio.play().catch(() => {
+      this.isBgmPlaying = false;
+      this.emitBgmState();
+    });
+  }
+
+  public toggleBgmPlay() {
+    if (this.bgmTracks.length === 0) return;
+    if (this.isBgmPlaying && this.bgmAudio) {
+      this.bgmAudio.pause();
+      this.isBgmPlaying = false;
+      this.emitBgmState();
+      return;
+    }
+    if (this.bgmAudio && this.bgmAudio.src) {
+      this.bgmAudio.volume = this.isTabMuted()
+        ? 0
+        : Math.max(0, Math.min(1, this.bgmVolume));
+      this.bgmAudio
+        .play()
+        .then(() => {
+          this.isBgmPlaying = true;
+          this.emitBgmState();
+        })
+        .catch(() => {
+          this.playBgmTrackAt(this.currentBgmIndex);
+        });
+    } else {
+      this.playBgmTrackAt(this.currentBgmIndex);
+    }
+  }
+
+  public playNextBgmTrack() {
+    if (this.bgmTracks.length === 0) return;
+    const nextIdx = (this.currentBgmIndex + 1) % this.bgmTracks.length;
+    this.playBgmTrackAt(nextIdx);
+  }
+
+  public playPrevBgmTrack() {
+    if (this.bgmTracks.length === 0) return;
+    const prevIdx =
+      (this.currentBgmIndex - 1 + this.bgmTracks.length) %
+      this.bgmTracks.length;
+    this.playBgmTrackAt(prevIdx);
+  }
+
+  public setBgmPlayMode(mode: BgmPlayMode) {
+    this.bgmPlayMode = mode;
+    if (this.bgmAudio) {
+      this.bgmAudio.loop = mode === 'loop_one';
+    }
+    this.emitBgmState();
+  }
+
+  public setBgmVolume(vol: number) {
+    this.bgmVolume = Math.max(0, Math.min(1, vol));
+    if (this.bgmAudio) {
+      this.bgmAudio.volume = this.isTabMuted() ? 0 : this.bgmVolume;
+    }
+    this.emitBgmState();
   }
 
   private initCtx() {
@@ -174,8 +549,14 @@ class SoundService {
     this.remoteSlaveMode = active;
     if (active) {
       this.stopImmediate();
+      if (this.bgmAudio) {
+        this.bgmAudio.volume = 0;
+      }
     } else {
       this.remoteMasterQueueSnapshot = null;
+      if (this.bgmAudio && !this.localTabMuted) {
+        this.bgmAudio.volume = this.bgmVolume;
+      }
     }
     this.emitEventQueue();
   }
@@ -217,6 +598,9 @@ class SoundService {
       } catch {
         // Ignore
       }
+    }
+    if (this.bgmAudio) {
+      this.bgmAudio.volume = this.isTabMuted() ? 0 : this.bgmVolume;
     }
   }
 
@@ -276,6 +660,15 @@ class SoundService {
 
   public syncConfig(config: GameConfig) {
     this.latestConfig = config;
+    if (config.bgmPlayMode && config.bgmPlayMode !== this.bgmPlayMode) {
+      this.setBgmPlayMode(config.bgmPlayMode);
+    }
+    if (
+      typeof config.bgmVolume === 'number' &&
+      Math.abs(config.bgmVolume - this.bgmVolume) > 0.005
+    ) {
+      this.setBgmVolume(config.bgmVolume);
+    }
     if (this.currentAudio) {
       try {
         const { effectiveRate, preservePitch } =
@@ -295,17 +688,43 @@ class SoundService {
     }
   }
 
+  public isBusySpeakingOrQueued(): boolean {
+    return this.isSpeaking || this.ttsQueue.length > 0;
+  }
+
   public clearEventQueue() {
+    const callbacks = [
+      this.activeEventItem?.onDone,
+      ...this.ttsQueue.map((q) => q.onDone),
+    ].filter(Boolean) as Array<() => void>;
     this.ttsQueue = [];
     this.stopCurrentUtteranceOnly();
     this.emitEventQueue();
+    for (const cb of callbacks) {
+      try {
+        cb();
+      } catch {
+        // Ignore
+      }
+    }
   }
 
   public stopImmediate() {
+    const callbacks = [
+      this.activeEventItem?.onDone,
+      ...this.ttsQueue.map((q) => q.onDone),
+    ].filter(Boolean) as Array<() => void>;
     this.ttsQueue = [];
     this.stopCurrentUtteranceOnly();
     this.emitStatus('Đã ngắt đọc', false, '');
     this.emitEventQueue();
+    for (const cb of callbacks) {
+      try {
+        cb();
+      } catch {
+        // Ignore
+      }
+    }
   }
 
   private stopCurrentUtteranceOnly() {
@@ -451,55 +870,184 @@ class SoundService {
   }
 
   /**
+   * Chế độ chào người vào phòng Live:
+   * "Hữu duyên gặp [Tên], bạn ở đâu đến đây thế?" (hoặc các mẫu câu khác do người dùng thêm)
+   */
+  public enqueueWelcomeJoin(
+    username: string,
+    config: GameConfig,
+    force = false
+  ): boolean {
+    this.latestConfig = config;
+    if (!config.ttsEnabled) return false;
+    if (!force && config.welcomeJoinEnabled === false) return false;
+
+    const now = Date.now();
+    // Chống spam khi có quá nhiều người vào phòng cùng lúc hoặc hàng chờ đọc quà đang dài
+    if (!force) {
+      if (now - this.lastWelcomeJoinAt < 4000) return false;
+      if (this.ttsQueue.length >= 4) return false;
+    }
+    this.lastWelcomeJoinAt = now;
+
+    const phrases =
+      Array.isArray(config.welcomeJoinPhrases) &&
+      config.welcomeJoinPhrases.length > 0
+        ? config.welcomeJoinPhrases.filter((p) => p && p.trim().length > 0)
+        : DEFAULT_WELCOME_JOIN_PHRASES;
+
+    if (phrases.length === 0) return false;
+    const chosen = phrases[Math.floor(Math.random() * phrases.length)];
+    const cleanUser = (username || 'Bạn mới').replace(/^@+/, '').trim();
+    const formatted = chosen
+      .replace(/\[Tên\]|\[tên\]|\{name\}|\bA\b/g, cleanUser)
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const clean = sanitizeAndLimitSpeechText(formatted, 45);
+    if (!clean) return false;
+
+    this.ttsQueue.push({
+      id: `welcome_join_${now}_${Math.random().toString(36).slice(2, 6)}`,
+      text: clean,
+      isPriority: false,
+      addedAt: now,
+    });
+    this.emitEventQueue();
+    this.processQueue(config);
+    return true;
+  }
+
+  /**
    * Đọc luồng âm thanh khi Vòng X bắt đầu:
    * "Vòng X bắt đầu, mời các bạn tham gia giao lưu với nhau!"
    */
-  public announceRoundStart(roundNumber: number, config: GameConfig) {
+  public announceRoundStart(
+    roundNumber: number,
+    config: GameConfig,
+    onDone?: () => void
+  ) {
     this.latestConfig = config;
-    if (config.roundStartTtsEnabled === false || !config.ttsEnabled) return;
+    if (config.roundStartTtsEnabled === false || !config.ttsEnabled) {
+      if (onDone) onDone();
+      return;
+    }
 
     this.playRoundStartChimeSfx(config.sfxVolume);
 
     const rawTemplate =
       config.roundStartTtsTemplate ||
       'Vòng [Vòng] bắt đầu, mời các bạn tham gia giao lưu với nhau!';
+    const sessionName = config.sessionTitle || 'Vòng';
     const formatted = rawTemplate
-      .replace(/\[Vòng\]|\[vòng\]|\[Phiên\]|\[phiên\]|\{round\}/gi, String(roundNumber))
+      .replace(
+        /\[Vòng\]|\[vòng\]|\[Phiên\]|\[phiên\]|\{round\}/gi,
+        String(roundNumber)
+      )
+      .replace(/\[TênPhiên\]|\[tênphiên\]/gi, sessionName)
       .replace(/\s+/g, ' ')
       .trim();
 
     const clean = sanitizeAndLimitSpeechText(formatted, 45);
-    if (!clean) return;
+    if (!clean) {
+      if (onDone) onDone();
+      return;
+    }
 
     this.ttsQueue.unshift({
       id: `round_start_${roundNumber}_${Date.now()}`,
       text: clean,
       isPriority: true,
       addedAt: Date.now(),
+      onDone,
     });
     this.emitEventQueue();
     this.processQueue(config);
   }
 
   /**
-   * Ngắt ngay câu đọc quà đang dở khi hết giờ phiên để đọc ngay thông báo Tổng kết Top 3 tỉnh dẫn đầu phiên
+   * Đọc thông báo Tổng kết Top 3 tỉnh dẫn đầu phiên:
+   * - Nếu người đọc đang đọc dở câu sự kiện cuối cùng của phiên thì đợi đọc nốt câu đó xong rồi đọc tiếp ngay phần tổng kết (không cắt ngang giọng đọc).
+   * - Đọc lần lượt đầy đủ tất cả các câu trong bản tổng kết (Hạng 1, Hạng 2, Hạng 3 kèm tên người tặng điểm nhiều nhất).
+   * - Chỉ khi người đọc ĐỌC XONG HẾT toàn bộ câu cuối cùng của bản tổng kết mới gọi `onDone()` để chuyển sang phiên game mới!
    */
-  public announceSessionResultNow(summaryText: string, config: GameConfig) {
+  public announceSessionResultNow(
+    summaryInput: string | string[],
+    config: GameConfig,
+    onDone?: () => void
+  ) {
     this.latestConfig = config;
+    // Xóa các câu sự kiện chưa đọc trong hàng chờ âm thanh (các lượt quà chưa zoom đã được bảo lưu ở cameraQueue sang phiên sau)
+    // nhưng KHÔNG ngắt câu đang phát dở để người đọc đọc trọn vẹn câu hiện tại rồi đọc luôn tổng kết.
     this.ttsQueue = [];
-    this.stopCurrentUtteranceOnly();
     this.playSessionEndFanfareSfx(config.sfxVolume);
-    if (!config.ttsEnabled) return;
-    const clean = sanitizeAndLimitSpeechText(summaryText, 55);
-    if (!clean) return;
-    this.ttsQueue.push({
-      id: `session_end_${Date.now()}`,
-      text: clean,
-      isPriority: true,
-      addedAt: Date.now(),
+
+    if (!config.ttsEnabled) {
+      if (onDone) {
+        setTimeout(onDone, 3000);
+      }
+      return;
+    }
+
+    const rawList = Array.isArray(summaryInput) ? summaryInput : [summaryInput];
+    const cleanSentences: string[] = [];
+    for (const part of rawList) {
+      const sanitized = sanitizeAndLimitSpeechText(part, 180);
+      if (sanitized) {
+        const subChunks = splitSpeechIntoChunks(sanitized, 165);
+        cleanSentences.push(...subChunks);
+      }
+    }
+
+    if (cleanSentences.length === 0) {
+      if (onDone) {
+        setTimeout(onDone, 2000);
+      }
+      return;
+    }
+
+    const now = Date.now();
+    cleanSentences.forEach((sentence, idx) => {
+      const isLast = idx === cleanSentences.length - 1;
+      this.ttsQueue.push({
+        id: `session_end_${now}_${idx}`,
+        text: sentence,
+        isPriority: true,
+        addedAt: now + idx,
+        onDone: isLast ? onDone : undefined,
+      });
     });
+
     this.emitEventQueue();
     this.processQueue(config);
+  }
+
+  /**
+   * Thỉnh thoảng chèn câu nói mời người chơi gửi hoa hồng theo format và tỉ lệ % xuất hiện
+   */
+  private pickRosePromptSuffix(
+    username: string,
+    cleanProvince: string,
+    config: GameConfig
+  ): string {
+    if (config.rosePromptEnabled === false) return '';
+    const chance = Math.max(
+      0,
+      Math.min(100, config.rosePromptChancePercent ?? 25)
+    );
+    if (chance <= 0) return '';
+    if (Math.random() * 100 > chance) return '';
+
+    const rawPrompt = (
+      config.rosePromptTemplate ||
+      'Mời các bạn thả hoa hồng để cộng thật nhiều điểm giúp tỉnh quê mình bứt phá lên top 1 nào!'
+    ).trim();
+    if (!rawPrompt) return '';
+
+    return rawPrompt
+      .replace(/\[Tên\]|\[tên\]|\{name\}/gi, username)
+      .replace(/\[Tỉnh\]|\[tỉnh\]|\{province\}/gi, cleanProvince)
+      .trim();
   }
 
   /**
@@ -528,7 +1076,6 @@ class SoundService {
     );
     if (activePool.length === 0) return '';
 
-    // Lọc các câu vượt qua ngưỡng % kích hoạt riêng hoặc chọn theo trọng số % kích hoạt
     const triggeredPool = activePool.filter(
       (p) => Math.random() * 100 <= Math.max(1, Math.min(100, p.chancePercent))
     );
@@ -584,10 +1131,12 @@ class SoundService {
 
   /**
    * Tạo câu đọc cho sự kiện:
-   * - Nếu là NPC gửi hoa hồng / quà coin: "NPC [Tên] đã hỗ trợ [Điểm] điểm về tỉnh [Tỉnh]" (tuyệt đối không nói NPC tặng quà kẻo vi phạm)
+   * - Nếu là NPC gửi hoa hồng / quà coin (isNpc && isRose): "NPC [Tên] đã hỗ trợ [Điểm] điểm về tỉnh [Tỉnh]" (tuyệt đối không nói NPC tặng quà kẻo vi phạm)
+   * - Nếu NPC chỉ hỗ trợ 1 điểm (!isRose): Coi như người chơi bình thường, KHÔNG đọc từ "NPC" ("Bạn [Tên] đã đến tỉnh [Tỉnh] và gửi 1 điểm")
+   * - Nếu người chơi tặng NHIỀU hoa hồng (roseCount > 1 hoặc points >= 2x rosePoints): Đọc mẫu câu cảm ơn nhiệt tình (`multiRoseGiftTtsTemplate`)
+   * - Nếu người chơi tặng 1 Hoa hồng: "[Tên] đã gửi hoa hồng kèm [Điểm] điểm về [Tỉnh]"
    * - Nếu người chơi bình luận tên tỉnh: "Bạn [Tên] đã đến tỉnh [Tỉnh] và gửi [Điểm] điểm"
-   * - Nếu người chơi tặng Hoa hồng: "[Tên] đã gửi hoa hồng kèm [Điểm] điểm về [Tỉnh]"
-   * - Có % xác suất nối thêm câu chào / câu vu vơ phía sau!
+   * - Có % xác suất nối thêm câu chào / vu vơ hoặc lời mời thả hoa hồng phía sau!
    */
   public formatProvinceGiftSpeech(
     username: string,
@@ -596,18 +1145,33 @@ class SoundService {
     isRose: boolean,
     config: GameConfig,
     includeRandomPhrase = true,
-    isNpc = false
+    isNpc = false,
+    roseCount = 1
   ): string {
     const cleanProvince = provinceName.replace(/^TP\.\s*/i, '').trim();
     const cleanUsername = username.replace(/^NPC\s+/i, '').trim();
+    const effectiveRoses = isRose
+      ? Math.max(
+          1,
+          roseCount || Math.round(points / Math.max(1, config.rosePoints || 5))
+        )
+      : 0;
+    // Chỉ coi là NPC khi gửi gói Hoa hồng / Quà coin (> 1 điểm). Nếu hỗ trợ 1 điểm thì coi như người bình thường!
+    const isNpcGiftSupport = Boolean(isNpc && isRose);
+    const isMultiRose =
+      !isNpcGiftSupport &&
+      isRose &&
+      (effectiveRoses >= 2 || points >= Math.max(1, config.rosePoints || 5) * 2);
 
     let rawTpl = '';
-    if (isNpc && isRose) {
+    if (isNpcGiftSupport) {
       rawTpl =
         config.npcSupportTtsTemplate ||
         'NPC [Tên] đã hỗ trợ [Điểm] điểm về tỉnh [Tỉnh]';
-    } else if (isNpc) {
-      rawTpl = 'NPC [Tên] đã đến tỉnh [Tỉnh] và hỗ trợ [Điểm] điểm';
+    } else if (isMultiRose) {
+      rawTpl =
+        config.multiRoseGiftTtsTemplate ||
+        'Wow! Cảm ơn [Tên] rất nhiều đã gửi [SốHoa] bông hoa hồng kèm [Điểm] điểm siêu khủng về tỉnh [Tỉnh]! Yêu [Tên] quá trời luôn!';
     } else if (isRose) {
       rawTpl =
         config.roseGiftTtsTemplate ||
@@ -620,33 +1184,44 @@ class SoundService {
 
     let formatted = rawTpl
       .replace(/\[Tên\]|\[tên\]|\{name\}/gi, cleanUsername)
+      .replace(
+        /\[SốHoa\]|\[sốhoa\]|\[TổngHoa\]|\[Hoa\]|\{roses\}/gi,
+        String(Math.max(2, effectiveRoses))
+      )
       .replace(/\[Điểm\]|\[điểm\]|\{points\}/gi, String(points))
       .replace(/\[Tỉnh\]|\[tỉnh\]|\{province\}/gi, cleanProvince)
       .replace(/\s+/g, ' ')
       .trim();
 
     if (includeRandomPhrase) {
-      const suffix = this.pickRandomGreetingSuffix(
-        cleanUsername,
-        cleanProvince,
-        config
-      );
-      if (suffix) {
-        formatted = `${formatted}. ${suffix}`;
+      const rosePrompt = !isMultiRose
+        ? this.pickRosePromptSuffix(cleanUsername, cleanProvince, config)
+        : '';
+      if (rosePrompt) {
+        formatted = `${formatted}. ${rosePrompt}`;
+      } else {
+        const suffix = this.pickRandomGreetingSuffix(
+          cleanUsername,
+          cleanProvince,
+          config
+        );
+        if (suffix) {
+          formatted = `${formatted}. ${suffix}`;
+        }
       }
     }
 
     return sanitizeAndLimitSpeechText(
       formatted,
-      Math.max(40, config.maxTtsWords || 45)
+      Math.max(65, config.maxTtsWords || 65)
     );
   }
 
   /**
    * Tạo câu đọc gộp TẤT CẢ những người cùng vào 1 tỉnh trong hàng chờ để giải phóng nhanh hàng chờ:
-   * - Nếu có NPC gửi hoa hồng / quà coin: "NPC A, B đã hỗ trợ N điểm về tỉnh X" (không nói tặng quà)
-   * - Nếu người thật không có hoa hồng: "Các bạn A, B, C đã đến tỉnh X và gửi N điểm"
-   * - Nếu người thật có hoa hồng: "A, B, C đã gửi hoa hồng kèm N điểm về tỉnh X"
+   * - Nếu có NPC gửi hoa hồng / quà coin (isNpc && totalRoses > 0): "NPC A, B đã hỗ trợ N điểm về tỉnh X" (không nói tặng quà)
+   * - Nếu chỉ hỗ trợ 1 điểm (totalRoses === 0): Coi như người bình thường, không đọc từ NPC ("Các bạn A, B, C đã đến tỉnh X và gửi N điểm")
+   * - Nếu người thật gửi nhiều hoa hồng: Cảm ơn nhiệt tình danh sách người chơi kèm tổng số hoa & điểm
    */
   public formatBatchedProvinceGiftSpeech(
     usernames: string[],
@@ -660,6 +1235,7 @@ class SoundService {
     const uniqueNames = Array.from(
       new Set(usernames.map((u) => u.trim()).filter(Boolean))
     );
+    const isNpcGiftSupport = Boolean(isNpc && totalRoses > 0);
     if (uniqueNames.length <= 1) {
       return this.formatProvinceGiftSpeech(
         uniqueNames[0] || 'Người chơi',
@@ -668,7 +1244,8 @@ class SoundService {
         totalRoses > 0,
         config,
         includeRandomPhrase,
-        isNpc
+        isNpcGiftSupport,
+        Math.max(1, totalRoses)
       );
     }
 
@@ -680,8 +1257,10 @@ class SoundService {
       totalRoses > 0 ? `${totalRoses} hoa hồng` : 'quà giao lưu';
 
     let formatted = '';
-    if (isNpc) {
+    if (isNpcGiftSupport) {
       formatted = `NPC ${namesJoined} đã hỗ trợ ${totalPoints} điểm về tỉnh ${cleanProvince}`;
+    } else if (totalRoses >= 2) {
+      formatted = `Wow! Cảm ơn ${namesJoined} rất nhiều đã gửi tổng cộng ${totalRoses} bông hoa hồng kèm ${totalPoints} điểm về tỉnh ${cleanProvince}! Tuyệt vời quá!`;
     } else if (totalRoses > 0) {
       formatted = `${namesJoined} đã gửi hoa hồng kèm ${totalPoints} điểm về ${cleanProvince}`;
     } else {
@@ -698,19 +1277,27 @@ class SoundService {
     }
 
     if (includeRandomPhrase) {
-      const suffix = this.pickRandomGreetingSuffix(
-        namesJoined,
-        cleanProvince,
-        config
-      );
-      if (suffix) {
-        formatted = `${formatted}. ${suffix}`;
+      const rosePrompt =
+        totalRoses === 0
+          ? this.pickRosePromptSuffix(namesJoined, cleanProvince, config)
+          : '';
+      if (rosePrompt) {
+        formatted = `${formatted}. ${rosePrompt}`;
+      } else {
+        const suffix = this.pickRandomGreetingSuffix(
+          namesJoined,
+          cleanProvince,
+          config
+        );
+        if (suffix) {
+          formatted = `${formatted}. ${suffix}`;
+        }
       }
     }
 
     return sanitizeAndLimitSpeechText(
       formatted,
-      Math.max(60, config.maxTtsWords || 60)
+      Math.max(75, config.maxTtsWords || 75)
     );
   }
 
@@ -727,7 +1314,7 @@ class SoundService {
     if (!config.ttsEnabled) return false;
     const cleanText = sanitizeAndLimitSpeechText(
       text,
-      Math.max(50, config.maxTtsWords || 50)
+      Math.max(75, config.maxTtsWords || 75)
     );
     if (!cleanText) return false;
 
@@ -1014,6 +1601,7 @@ class SoundService {
     }
 
     const nextText = nextItem.text;
+    const itemCallback = nextItem.onDone;
     const token = ++this.speechTokenSeq;
     let finishedOnce = false;
 
@@ -1049,6 +1637,13 @@ class SoundService {
         this.emitStatus('Sẵn sàng', false, '');
       }
       this.emitEventQueue();
+      if (itemCallback) {
+        try {
+          itemCallback();
+        } catch {
+          // Ignore callback error
+        }
+      }
       setTimeout(() => {
         if (this.latestConfig) {
           this.processQueue(this.latestConfig);
@@ -1061,7 +1656,7 @@ class SoundService {
       const simDurationMs = Math.max(
         1200,
         Math.min(
-          6000,
+          6500,
           Math.round((wordCount * 290) / Math.max(0.5, config.ttsRate || 1))
         )
       );
@@ -1073,7 +1668,8 @@ class SoundService {
   }
 
   /**
-   * Giọng đọc AI #3: Ưu tiên phát qua Node.js TTS Endpoint (hoặc tự động dự phòng qua /api/tts tích hợp sẵn)
+   * Giọng đọc AI #3: Ưu tiên phát qua Node.js TTS Endpoint (hoặc tự động dự phòng qua /api/tts tích hợp sẵn).
+   * Tự động tách văn bản dài thành các đoạn <= 165 ký tự và phát nối tiếp nhau cho tới khi đọc hết 100% mới gọi `onDone()`.
    */
   private playViaVoice3(
     text: string,
@@ -1081,107 +1677,138 @@ class SoundService {
     token: number,
     onDone: () => void
   ) {
-    const shortText = text.slice(0, 215);
+    const chunks = splitSpeechIntoChunks(text, 165);
+    if (chunks.length === 0) {
+      onDone();
+      return;
+    }
+
     const voice = config.nodeVoice || 'google-vi-gtx';
     const endpoint = (
       config.nodeTtsEndpoint || 'http://localhost:8080/tts'
     ).trim();
-    const primaryUrl = `${endpoint}?voice=${encodeURIComponent(
-      voice
-    )}&text=${encodeURIComponent(shortText)}`;
-    const cloudFallbackUrl = `/api/tts?lang=vi&voice=${encodeURIComponent(
-      voice
-    )}&text=${encodeURIComponent(shortText)}`;
 
-    const playBlobUrl = (
-      blobUrl: string,
-      sourceLabel: string,
-      latencyMs: number
-    ) => {
+    const buildUrls = (chunkText: string) => ({
+      primaryUrl: `${endpoint}?voice=${encodeURIComponent(
+        voice
+      )}&text=${encodeURIComponent(chunkText)}`,
+      cloudFallbackUrl: `/api/tts?lang=vi&voice=${encodeURIComponent(
+        voice
+      )}&text=${encodeURIComponent(chunkText)}`,
+    });
+
+    const playChunkAt = (chunkIdx: number) => {
       if (token !== this.speechTokenSeq) return;
-      const audio = new Audio();
-      audio.crossOrigin = 'anonymous';
-      this.currentAudio = audio;
-      const { effectiveRate, preservePitch } =
-        this.computeStreamPlaybackRateAndPitch(voice, config);
+      if (chunkIdx >= chunks.length) {
+        onDone();
+        return;
+      }
 
-      audio.src = blobUrl;
-      this.applyAudioPlaybackParams(
-        audio,
-        effectiveRate,
-        preservePitch,
-        config.ttsVolume
-      );
+      const currentChunkText = chunks[chunkIdx];
+      const { primaryUrl, cloudFallbackUrl } = buildUrls(currentChunkText);
 
-      audio.onloadedmetadata = () => {
+      // Prefetch đoạn tiếp theo trong lúc đang tải/phát đoạn hiện tại để nối câu mượt mà không trễ
+      if (chunkIdx + 1 < chunks.length) {
+        const nextUrls = buildUrls(chunks[chunkIdx + 1]);
+        void this.getOrFetchAudioBlobUrl(nextUrls.cloudFallbackUrl, 2400);
+      }
+
+      const advanceToNextChunk = () => {
+        if (token !== this.speechTokenSeq) return;
+        this.currentAudio = null;
+        if (chunkIdx + 1 < chunks.length) {
+          playChunkAt(chunkIdx + 1);
+        } else {
+          onDone();
+        }
+      };
+
+      const playBlobUrl = (
+        blobUrl: string,
+        sourceLabel: string,
+        latencyMs: number
+      ) => {
+        if (token !== this.speechTokenSeq) return;
+        const audio = new Audio();
+        audio.crossOrigin = 'anonymous';
+        this.currentAudio = audio;
+        const { effectiveRate, preservePitch } =
+          this.computeStreamPlaybackRateAndPitch(voice, config);
+
+        audio.src = blobUrl;
         this.applyAudioPlaybackParams(
           audio,
           effectiveRate,
           preservePitch,
           config.ttsVolume
         );
-      };
 
-      audio.onplaying = () => {
-        this.ttsDiagnostic = {
-          ...this.ttsDiagnostic,
-          health: 'healthy',
-          activeServerLabel: sourceLabel,
-          statusHeadline: `Ổn định • Đang phát từ ${sourceLabel}`,
-          statusDetail: `Giọng: ${voice} (${latencyMs}ms)`,
-          lastLatencyMs: latencyMs,
-          lastUpdatedAt: Date.now(),
+        audio.onloadedmetadata = () => {
+          this.applyAudioPlaybackParams(
+            audio,
+            effectiveRate,
+            preservePitch,
+            config.ttsVolume
+          );
         };
-        this.emitEventQueue();
+
+        audio.onplaying = () => {
+          this.ttsDiagnostic = {
+            ...this.ttsDiagnostic,
+            health: 'healthy',
+            activeServerLabel: sourceLabel,
+            statusHeadline: `Ổn định • Đang phát từ ${sourceLabel}`,
+            statusDetail: `Giọng: ${voice} (${latencyMs}ms)`,
+            lastLatencyMs: latencyMs,
+            lastUpdatedAt: Date.now(),
+          };
+          this.emitEventQueue();
+        };
+
+        audio.onended = () => {
+          advanceToNextChunk();
+        };
+
+        audio.onerror = () => {
+          advanceToNextChunk();
+        };
+
+        audio.play().catch(() => {
+          advanceToNextChunk();
+        });
       };
 
-      audio.onended = () => {
+      void this.getOrFetchAudioBlobUrl(primaryUrl, 950).then((localBlob) => {
         if (token !== this.speechTokenSeq) return;
-        this.currentAudio = null;
-        onDone();
-      };
+        if (localBlob) {
+          const meta = this.audioBlobMetaCache.get(primaryUrl);
+          playBlobUrl(
+            localBlob,
+            `Giọng đọc AI #3 (${voice})`,
+            meta?.latencyMs ?? 0
+          );
+          return;
+        }
 
-      audio.onerror = () => {
-        if (token !== this.speechTokenSeq) return;
-        this.currentAudio = null;
-        onDone();
-      };
-
-      audio.play().catch(() => {
-        if (token !== this.speechTokenSeq) return;
-        this.currentAudio = null;
-        onDone();
+        void this.getOrFetchAudioBlobUrl(cloudFallbackUrl, 2400).then(
+          (cloudBlob) => {
+            if (token !== this.speechTokenSeq) return;
+            if (cloudBlob) {
+              const meta = this.audioBlobMetaCache.get(cloudFallbackUrl);
+              playBlobUrl(
+                cloudBlob,
+                `Giọng đọc AI #3 • Cloud (${voice})`,
+                meta?.latencyMs ?? 0
+              );
+              return;
+            }
+            advanceToNextChunk();
+          }
+        );
       });
     };
 
-    void this.getOrFetchAudioBlobUrl(primaryUrl, 950).then((localBlob) => {
-      if (token !== this.speechTokenSeq) return;
-      if (localBlob) {
-        const meta = this.audioBlobMetaCache.get(primaryUrl);
-        playBlobUrl(
-          localBlob,
-          `Giọng đọc AI #3 (${voice})`,
-          meta?.latencyMs ?? 0
-        );
-        return;
-      }
-
-      void this.getOrFetchAudioBlobUrl(cloudFallbackUrl, 2400).then(
-        (cloudBlob) => {
-          if (token !== this.speechTokenSeq) return;
-          if (cloudBlob) {
-            const meta = this.audioBlobMetaCache.get(cloudFallbackUrl);
-            playBlobUrl(
-              cloudBlob,
-              `Giọng đọc AI #3 • Cloud (${voice})`,
-              meta?.latencyMs ?? 0
-            );
-            return;
-          }
-          onDone();
-        }
-      );
-    });
+    playChunkAt(0);
   }
 }
 

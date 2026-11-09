@@ -49,7 +49,7 @@ export const SAMPLE_NAMES: string[] = [
  */
 export const INITIAL_PROVINCES_DATA: Omit<
   ProvinceCell,
-  'points' | 'giftCount' | 'roseCount' | 'recentContributors' | 'lastUpdatedAt'
+  'points' | 'giftCount' | 'roseCount' | 'top1WinCount' | 'recentContributors' | 'lastUpdatedAt'
 >[] = [
   // === 6 THÀNH PHỐ TRỰC THUỘC TRUNG ƯƠNG ===
   {
@@ -475,6 +475,7 @@ export function createInitialProvinces(): ProvinceCell[] {
     points: 0,
     giftCount: 0,
     roseCount: 0,
+    top1WinCount: 0,
     recentContributors: [],
     lastUpdatedAt: 0,
   }));
@@ -593,7 +594,7 @@ export const HOW_TO_PLAY_FONTS = [
 
 export const DEFAULT_HOW_TO_PLAY_CONFIG = {
   title: 'HƯỚNG DẪN CHƠI GAME',
-  content: '💬 Bình luận Tên Tỉnh: +1 điểm\n🌹 Tặng Hoa Hồng: +5 điểm về tỉnh vừa chọn',
+  content: '💬 Bình luận Tên Tỉnh (1 lần/phiên): +1 điểm\n🌹 Tặng Hoa Hồng (không giới hạn): +5 điểm/hoa',
   widthPx: 250,
   fontFamily: 'ui-sans-serif, system-ui, sans-serif',
   fontSizePx: 11,
@@ -601,15 +602,15 @@ export const DEFAULT_HOW_TO_PLAY_CONFIG = {
 };
 
 export const DEFAULT_LAYOUT_POSITIONS = {
-  headerBar: { x: 0, y: 0, scale: 1 },
-  visitingBar: { x: 0, y: 0, scale: 1 },
-  giftGuideIcons: { x: 0, y: 0, scale: 1 },
-  howToPlayBoard: { x: 0, y: 0, scale: 1 },
-  sessionTimerCard: { x: 0, y: 0, scale: 1 },
-  sessionBarChartCard: { x: 0, y: 0, scale: 1 },
-  bigAvatarZone: { x: 0, y: 0, scale: 1 },
-  giftToastBanner: { x: 0, y: 0, scale: 1 },
-  bottomPodium: { x: 0, y: 0, scale: 1 },
+  headerBar: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
+  visitingBar: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
+  giftGuideIcons: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
+  howToPlayBoard: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
+  sessionTimerCard: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
+  sessionBarChartCard: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
+  bigAvatarZone: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
+  giftToastBanner: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
+  bottomPodium: { x: 0, y: 0, scale: 1, scaleX: 1, scaleY: 1 },
 };
 
 export const DEFAULT_LAYOUT_VISIBILITY = {
@@ -623,6 +624,12 @@ export const DEFAULT_LAYOUT_VISIBILITY = {
   giftToastBanner: true,
   bottomPodium: true,
 };
+
+export const DEFAULT_WELCOME_JOIN_PHRASES: string[] = [
+  'Hữu duyên gặp [Tên], bạn ở đâu đến đây thế?',
+  'Chào mừng [Tên] mới vào phòng giao lưu, bạn quê ở tỉnh nào thế?',
+  'Xin chào [Tên] nha, hãy bình luận tên tỉnh quê mình để cùng giao lưu nhé!',
+];
 
 export const DEFAULT_TTS_RANDOM_PHRASES = [
   {
@@ -664,6 +671,16 @@ export const DEFAULT_CONFIG: GameConfig = {
   sessionTitle: 'Đua Top Phiên',
   sessionAutoResetPoints: true,
   sessionResultHoldSec: 7,
+  podiumTitle: 'DANH SÁCH TỈNH ĐẠT TOP 1 NHIỀU NHẤT',
+
+  // Nhạc nền (BGM) trong Dev Âm Thanh
+  bgmEnabled: true,
+  bgmPlayMode: 'next_all',
+  bgmVolume: 0.35,
+
+  // Chế độ chào người vào phòng Live
+  welcomeJoinEnabled: true,
+  welcomeJoinPhrases: DEFAULT_WELCOME_JOIN_PHRASES,
 
   // Giọng đọc AI #3 mặc định
   ttsEnabled: true,
@@ -677,6 +694,8 @@ export const DEFAULT_CONFIG: GameConfig = {
   maxTtsQueueSize: 40,
   commentGiftTtsTemplate: 'Bạn [Tên] đã đến tỉnh [Tỉnh] và gửi [Điểm] điểm',
   roseGiftTtsTemplate: '[Tên] đã gửi hoa hồng kèm [Điểm] điểm về [Tỉnh]',
+  multiRoseGiftTtsTemplate:
+    'Wow! Cảm ơn [Tên] rất nhiều đã gửi [SốHoa] bông hoa hồng kèm [Điểm] điểm siêu khủng về tỉnh [Tỉnh]! Yêu [Tên] quá trời luôn!',
   batchGiftTtsTemplate:
     'Các bạn [DanhSáchTên] đã đến tỉnh [Tỉnh] và gửi [Điểm] điểm',
   npcSupportTtsTemplate:
@@ -686,6 +705,10 @@ export const DEFAULT_CONFIG: GameConfig = {
     'Vòng [Vòng] bắt đầu, mời các bạn tham gia giao lưu với nhau!',
   ttsRandomPhraseChancePercent: 35,
   ttsRandomPhrases: DEFAULT_TTS_RANDOM_PHRASES,
+  rosePromptEnabled: true,
+  rosePromptChancePercent: 25,
+  rosePromptTemplate:
+    'Mời các bạn thả hoa hồng để cộng thật nhiều điểm giúp tỉnh quê mình bứt phá lên top 1 nào!',
   sfxEnabled: true,
   sfxVolume: 0.7,
 
@@ -1149,6 +1172,14 @@ async function connectTikTok(customUser) {
         const username = getUserName(data);
         const likeCount = Math.max(1, Number(data?.count ?? data?.likeCount ?? data?.unmergedLikeCount ?? 1) || 1);
         broadcast({ type: 'like', username, avatarUrl: getUserAvatar(data), likeCount });
+      } catch (e) {}
+    });
+
+    tiktok.on('member', data => {
+      try {
+        const username = getUserName(data);
+        console.log(\`👋 [VÀO PHÒNG] \${username} đã vào phòng Live\`);
+        broadcast({ type: 'member', username, avatarUrl: getUserAvatar(data) });
       } catch (e) {}
     });
 
