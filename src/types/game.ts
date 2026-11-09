@@ -315,7 +315,8 @@ export interface SyncPacket {
     | 'CLEAR_TTS_QUEUE'
     | 'SYNC_LIVE_TTS_SNAPSHOT'
     | 'REQUEST_FULL_SYNC'
-    | 'RESTORE_BACKUP';
+    | 'RESTORE_BACKUP'
+    | 'SYNC_BGM_STATE';
   payload: Record<string, any>;
   ts: number;
 }

@@ -8,6 +8,7 @@ import {
   CameraFocusReason,
   GameConfig,
 } from '../types/game';
+import { syncService } from './syncService';
 
 export type TTSStatusListener = (
   statusText: string,
@@ -44,6 +45,7 @@ export interface BgmStateSnapshot {
   isPlaying: boolean;
   playMode: BgmPlayMode;
   volume: number;
+  needsUnlock?: boolean;
 }
 
 export type BgmStateListener = (snapshot: BgmStateSnapshot) => void;
@@ -194,6 +196,10 @@ class SoundService {
   private bgmPlayMode: BgmPlayMode = 'next_all';
   private bgmVolume = 0.35;
   private bgmAudio: HTMLAudioElement | null = null;
+  private currentBgmTrackId: string | null = null;
+  private bgmNeedsUnlock = false;
+  private isApplyingRemoteBgm = false;
+  private bgmSyncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   private audioBlobCache = new Map<string, string>();
   private audioBlobMetaCache = new Map<
@@ -256,27 +262,78 @@ class SoundService {
           if (this.ctx && this.ctx.state === 'suspended') {
             void this.ctx.resume();
           }
+          if (this.isBgmPlaying && this.bgmAudio && this.bgmAudio.paused) {
+            this.bgmAudio.volume = this.localTabMuted
+              ? 0
+              : Math.max(0, Math.min(1, this.bgmVolume));
+            this.bgmAudio
+              .play()
+              .then(() => {
+                this.bgmNeedsUnlock = false;
+                this.emitBgmState();
+              })
+              .catch(() => {});
+          }
         } catch {
           // Ignore
         }
       };
       window.addEventListener('pointerdown', unlockAudio, { passive: true });
+      window.addEventListener('touchstart', unlockAudio, { passive: true });
+      window.addEventListener('click', unlockAudio, { passive: true });
       window.addEventListener('keydown', unlockAudio, { passive: true });
+    }
+  }
+
+  public unlockBgmPlayback() {
+    try {
+      if (this.ctx && this.ctx.state === 'suspended') {
+        void this.ctx.resume();
+      }
+      if (this.bgmTracks.length === 0) return;
+      if (this.bgmAudio && this.bgmAudio.src) {
+        this.bgmAudio.volume = this.localTabMuted
+          ? 0
+          : Math.max(0, Math.min(1, this.bgmVolume));
+        this.bgmAudio
+          .play()
+          .then(() => {
+            this.isBgmPlaying = true;
+            this.bgmNeedsUnlock = false;
+            this.emitBgmState();
+          })
+          .catch(() => {
+            this.playBgmTrackAt(this.currentBgmIndex, false);
+          });
+      } else {
+        this.playBgmTrackAt(this.currentBgmIndex, false);
+      }
+    } catch {
+      // Ignore
     }
   }
 
   private saveBgmTracksToStorage() {
     try {
-      // Lưu các bài nhạc (ưu tiên URL và Data URL vừa phải) để giữ danh sách nhạc nền
       const serializable = this.bgmTracks.filter(
-        (t) => !t.url.startsWith('blob:') && t.url.length < 4 * 1024 * 1024
+        (t) => !t.url.startsWith('blob:') && t.url.length < 15 * 1024 * 1024
       );
       localStorage.setItem(
         STORAGE_BGM_TRACKS_KEY,
         JSON.stringify(serializable)
       );
     } catch {
-      // Ignore quota errors for large files
+      try {
+        const lightSerializable = this.bgmTracks.filter(
+          (t) => !t.url.startsWith('blob:') && t.url.length < 3.5 * 1024 * 1024
+        );
+        localStorage.setItem(
+          STORAGE_BGM_TRACKS_KEY,
+          JSON.stringify(lightSerializable)
+        );
+      } catch {
+        // Ignore quota errors for large files
+      }
     }
   }
 
@@ -287,7 +344,107 @@ class SoundService {
       isPlaying: this.isBgmPlaying,
       playMode: this.bgmPlayMode,
       volume: this.bgmVolume,
+      needsUnlock: this.bgmNeedsUnlock,
     };
+  }
+
+  public getBgmSyncPayload() {
+    return {
+      tracks: this.bgmTracks,
+      currentIndex: this.currentBgmIndex,
+      isPlaying: this.isBgmPlaying,
+      playMode: this.bgmPlayMode,
+      volume: this.bgmVolume,
+      currentTime: this.bgmAudio ? this.bgmAudio.currentTime || 0 : 0,
+    };
+  }
+
+  public broadcastBgmSync(immediate = true) {
+    if (this.isApplyingRemoteBgm) return;
+    if (this.bgmSyncDebounceTimer) {
+      clearTimeout(this.bgmSyncDebounceTimer);
+      this.bgmSyncDebounceTimer = null;
+    }
+    if (immediate) {
+      syncService.sendCommand('SYNC_BGM_STATE', this.getBgmSyncPayload());
+    } else {
+      this.bgmSyncDebounceTimer = setTimeout(() => {
+        this.bgmSyncDebounceTimer = null;
+        syncService.sendCommand('SYNC_BGM_STATE', this.getBgmSyncPayload());
+      }, 120);
+    }
+  }
+
+  public applyRemoteBgmSnapshot(payload: Record<string, any>) {
+    if (!payload || typeof payload !== 'object') return;
+    this.isApplyingRemoteBgm = true;
+    try {
+      if (payload.playMode === 'loop_one' || payload.playMode === 'next_all') {
+        this.bgmPlayMode = payload.playMode;
+      }
+      if (typeof payload.volume === 'number') {
+        this.bgmVolume = Math.max(0, Math.min(1, payload.volume));
+      }
+      if (Array.isArray(payload.tracks)) {
+        this.bgmTracks = payload.tracks.filter(
+          (t: any) =>
+            t && typeof t.name === 'string' && typeof t.url === 'string'
+        );
+        this.saveBgmTracksToStorage();
+      }
+      if (typeof payload.currentIndex === 'number') {
+        this.currentBgmIndex =
+          this.bgmTracks.length > 0
+            ? ((payload.currentIndex % this.bgmTracks.length) +
+                this.bgmTracks.length) %
+              this.bgmTracks.length
+            : 0;
+      }
+
+      const wantPlaying = Boolean(payload.isPlaying);
+      if (this.bgmTracks.length === 0 || !wantPlaying) {
+        if (this.bgmAudio) {
+          try {
+            this.bgmAudio.pause();
+          } catch {
+            // Ignore
+          }
+        }
+        this.isBgmPlaying = false;
+        this.bgmNeedsUnlock = false;
+        this.emitBgmState();
+        return;
+      }
+
+      const targetTrack =
+        this.bgmTracks[this.currentBgmIndex] || this.bgmTracks[0];
+      if (!targetTrack) {
+        this.emitBgmState();
+        return;
+      }
+
+      const isSameTrackPlaying =
+        this.bgmAudio &&
+        this.currentBgmTrackId === targetTrack.id &&
+        !this.bgmAudio.paused;
+
+      if (isSameTrackPlaying && this.bgmAudio) {
+        this.bgmAudio.volume = this.localTabMuted
+          ? 0
+          : Math.max(0, Math.min(1, this.bgmVolume));
+        this.bgmAudio.loop = this.bgmPlayMode === 'loop_one';
+        this.isBgmPlaying = true;
+        this.emitBgmState();
+      } else {
+        const startOffset =
+          typeof payload.currentTime === 'number' && payload.currentTime > 0
+            ? payload.currentTime
+            : 0;
+        this.playBgmTrackAt(this.currentBgmIndex, false, startOffset);
+      }
+    } finally {
+      this.isApplyingRemoteBgm = false;
+    }
   }
 
   public subscribeBgmState(fn: BgmStateListener) {
@@ -301,27 +458,60 @@ class SoundService {
     this.bgmListeners.forEach((fn) => fn(snap));
   }
 
+  private readFileAsAudioDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        let res = String(reader.result || '');
+        if (res.startsWith('data:application/octet-stream;base64,')) {
+          res = res.replace(
+            'data:application/octet-stream;base64,',
+            'data:audio/mpeg;base64,'
+          );
+        } else if (res.startsWith('data:;base64,')) {
+          res = res.replace('data:;base64,', 'data:audio/mpeg;base64,');
+        }
+        resolve(res);
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
   public addBgmFiles(fileList: FileList | File[]) {
     const files = Array.from(fileList);
     if (files.length === 0) return;
 
-    const added: BgmTrackItem[] = files.map((file) => {
-      const blobUrl = URL.createObjectURL(file);
-      return {
-        id: `bgm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        name: file.name.replace(/\.[^/.]+$/, ''),
-        url: blobUrl,
-      };
-    });
+    void Promise.all(
+      files.map(async (file) => {
+        try {
+          const dataUrl = await this.readFileAsAudioDataUrl(file);
+          return {
+            id: `bgm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            name: file.name.replace(/\.[^/.]+$/, ''),
+            url: dataUrl,
+          } as BgmTrackItem;
+        } catch {
+          return null;
+        }
+      })
+    ).then((results) => {
+      const added = results.filter((item): item is BgmTrackItem => item !== null);
+      if (added.length === 0) return;
 
-    const wasEmpty = this.bgmTracks.length === 0;
-    this.bgmTracks = [...this.bgmTracks, ...added];
-    if (wasEmpty) {
-      this.currentBgmIndex = 0;
-      this.playBgmTrackAt(0);
-    } else {
-      this.emitBgmState();
-    }
+      const wasEmpty = this.bgmTracks.length === 0;
+      this.bgmTracks = [...this.bgmTracks, ...added];
+      this.saveBgmTracksToStorage();
+
+      if (wasEmpty || !this.isBgmPlaying) {
+        const startIdx = wasEmpty ? 0 : this.currentBgmIndex;
+        this.currentBgmIndex = startIdx;
+        this.playBgmTrackAt(startIdx, true);
+      } else {
+        this.emitBgmState();
+        this.broadcastBgmSync(true);
+      }
+    });
   }
 
   public addBgmUrl(name: string, url: string) {
@@ -335,11 +525,13 @@ class SoundService {
     const wasEmpty = this.bgmTracks.length === 0;
     this.bgmTracks = [...this.bgmTracks, item];
     this.saveBgmTracksToStorage();
-    if (wasEmpty) {
-      this.currentBgmIndex = 0;
-      this.playBgmTrackAt(0);
+    if (wasEmpty || !this.isBgmPlaying) {
+      const startIdx = wasEmpty ? 0 : this.currentBgmIndex;
+      this.currentBgmIndex = startIdx;
+      this.playBgmTrackAt(startIdx, true);
     } else {
       this.emitBgmState();
+      this.broadcastBgmSync(true);
     }
   }
 
@@ -362,6 +554,7 @@ class SoundService {
       this.stopBgmAudio();
       this.currentBgmIndex = 0;
       this.emitBgmState();
+      this.broadcastBgmSync(true);
       return;
     }
 
@@ -369,15 +562,18 @@ class SoundService {
       const nextIdx = idx % nextTracks.length;
       this.currentBgmIndex = nextIdx;
       if (this.isBgmPlaying) {
-        this.playBgmTrackAt(nextIdx);
+        this.playBgmTrackAt(nextIdx, true);
       } else {
         this.emitBgmState();
+        this.broadcastBgmSync(true);
       }
     } else if (idx < this.currentBgmIndex) {
       this.currentBgmIndex = Math.max(0, this.currentBgmIndex - 1);
       this.emitBgmState();
+      this.broadcastBgmSync(true);
     } else {
       this.emitBgmState();
+      this.broadcastBgmSync(true);
     }
   }
 
@@ -396,10 +592,13 @@ class SoundService {
     this.stopBgmAudio();
     this.saveBgmTracksToStorage();
     this.emitBgmState();
+    this.broadcastBgmSync(true);
   }
 
   private stopBgmAudio() {
     this.isBgmPlaying = false;
+    this.bgmNeedsUnlock = false;
+    this.currentBgmTrackId = null;
     if (this.bgmAudio) {
       try {
         this.bgmAudio.onended = null;
@@ -413,10 +612,15 @@ class SoundService {
     }
   }
 
-  public playBgmTrackAt(index: number) {
+  public playBgmTrackAt(
+    index: number,
+    shouldSync = true,
+    startTimeSec = 0
+  ) {
     if (this.bgmTracks.length === 0) {
       this.stopBgmAudio();
       this.emitBgmState();
+      if (shouldSync) this.broadcastBgmSync(true);
       return;
     }
     const safeIdx =
@@ -424,6 +628,7 @@ class SoundService {
       this.bgmTracks.length;
     this.currentBgmIndex = safeIdx;
     const track = this.bgmTracks[safeIdx];
+    this.currentBgmTrackId = track.id;
 
     if (this.bgmAudio) {
       try {
@@ -436,10 +641,27 @@ class SoundService {
     }
 
     const audio = new Audio(track.url);
-    audio.volume = this.isTabMuted()
+    audio.preload = 'auto';
+    audio.volume = this.localTabMuted
       ? 0
       : Math.max(0, Math.min(1, this.bgmVolume));
     audio.loop = this.bgmPlayMode === 'loop_one';
+
+    if (startTimeSec > 0) {
+      audio.addEventListener(
+        'loadedmetadata',
+        () => {
+          try {
+            if (audio.duration && startTimeSec < audio.duration) {
+              audio.currentTime = startTimeSec;
+            }
+          } catch {
+            // Ignore
+          }
+        },
+        { once: true }
+      );
+    }
 
     audio.onended = () => {
       if (this.bgmTracks.length === 0) return;
@@ -449,60 +671,79 @@ class SoundService {
       } else {
         // Chế độ Next: Chuyển sang bài kế tiếp, tới bài cuối thì tự động quay lại bài đầu tiên (index 0)
         const nextIdx = (this.currentBgmIndex + 1) % this.bgmTracks.length;
-        this.playBgmTrackAt(nextIdx);
+        this.playBgmTrackAt(nextIdx, !this.isApplyingRemoteBgm);
       }
     };
 
     audio.onerror = () => {
       if (this.bgmTracks.length > 1) {
         const nextIdx = (this.currentBgmIndex + 1) % this.bgmTracks.length;
-        this.playBgmTrackAt(nextIdx);
+        this.playBgmTrackAt(nextIdx, !this.isApplyingRemoteBgm);
       } else {
         this.isBgmPlaying = false;
+        this.bgmNeedsUnlock = false;
         this.emitBgmState();
       }
     };
 
     this.bgmAudio = audio;
     this.isBgmPlaying = true;
+    this.bgmNeedsUnlock = false;
     this.emitBgmState();
+    if (shouldSync) {
+      this.broadcastBgmSync(true);
+    }
 
-    audio.play().catch(() => {
-      this.isBgmPlaying = false;
-      this.emitBgmState();
-    });
+    audio
+      .play()
+      .then(() => {
+        this.bgmNeedsUnlock = false;
+        this.isBgmPlaying = true;
+        this.emitBgmState();
+      })
+      .catch(() => {
+        // Trình duyệt ở màn hình Live có thể chặn Autoplay cho tới khi click chuột lần đầu:
+        // Giữ trạng thái isBgmPlaying = true và bật cờ bgmNeedsUnlock để tự phát ngay khi chạm/bấm
+        this.isBgmPlaying = true;
+        this.bgmNeedsUnlock = true;
+        this.emitBgmState();
+      });
   }
 
   public toggleBgmPlay() {
     if (this.bgmTracks.length === 0) return;
-    if (this.isBgmPlaying && this.bgmAudio) {
+    if (this.isBgmPlaying && this.bgmAudio && !this.bgmAudio.paused) {
       this.bgmAudio.pause();
       this.isBgmPlaying = false;
+      this.bgmNeedsUnlock = false;
       this.emitBgmState();
+      this.broadcastBgmSync(true);
       return;
     }
     if (this.bgmAudio && this.bgmAudio.src) {
-      this.bgmAudio.volume = this.isTabMuted()
+      this.bgmAudio.volume = this.localTabMuted
         ? 0
         : Math.max(0, Math.min(1, this.bgmVolume));
       this.bgmAudio
         .play()
         .then(() => {
           this.isBgmPlaying = true;
+          this.bgmNeedsUnlock = false;
           this.emitBgmState();
+          this.broadcastBgmSync(true);
         })
         .catch(() => {
-          this.playBgmTrackAt(this.currentBgmIndex);
+          this.playBgmTrackAt(this.currentBgmIndex, true);
         });
     } else {
-      this.playBgmTrackAt(this.currentBgmIndex);
+      this.playBgmTrackAt(this.currentBgmIndex, true);
     }
   }
 
   public playNextBgmTrack() {
     if (this.bgmTracks.length === 0) return;
     const nextIdx = (this.currentBgmIndex + 1) % this.bgmTracks.length;
-    this.playBgmTrackAt(nextIdx);
+    this.playBgmTrackAt(nextIdx, true);
   }
 
   public playPrevBgmTrack() {
@@ -510,7 +751,7 @@ class SoundService {
     const prevIdx =
       (this.currentBgmIndex - 1 + this.bgmTracks.length) %
       this.bgmTracks.length;
-    this.playBgmTrackAt(prevIdx);
+    this.playBgmTrackAt(prevIdx, true);
   }
 
   public setBgmPlayMode(mode: BgmPlayMode) {
@@ -519,14 +760,16 @@ class SoundService {
       this.bgmAudio.loop = mode === 'loop_one';
     }
     this.emitBgmState();
+    this.broadcastBgmSync(true);
   }
 
   public setBgmVolume(vol: number) {
     this.bgmVolume = Math.max(0, Math.min(1, vol));
     if (this.bgmAudio) {
-      this.bgmAudio.volume = this.isTabMuted() ? 0 : this.bgmVolume;
+      this.bgmAudio.volume = this.localTabMuted ? 0 : this.bgmVolume;
     }
     this.emitBgmState();
+    this.broadcastBgmSync(false);
   }
 
   private initCtx() {
@@ -551,14 +794,11 @@ class SoundService {
     this.remoteSlaveMode = active;
     if (active) {
       this.stopImmediate();
-      if (this.bgmAudio) {
-        this.bgmAudio.volume = 0;
-      }
     } else {
       this.remoteMasterQueueSnapshot = null;
-      if (this.bgmAudio && !this.localTabMuted) {
-        this.bgmAudio.volume = this.bgmVolume;
-      }
+    }
+    if (this.bgmAudio) {
+      this.bgmAudio.volume = this.localTabMuted ? 0 : this.bgmVolume;
     }
     this.emitEventQueue();
   }
@@ -602,7 +842,7 @@ class SoundService {
       }
     }
     if (this.bgmAudio) {
-      this.bgmAudio.volume = this.isTabMuted() ? 0 : this.bgmVolume;
+      this.bgmAudio.volume = this.localTabMuted ? 0 : this.bgmVolume;
     }
   }
 

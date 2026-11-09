@@ -1220,14 +1220,28 @@ async function connectTikTok(customUser) {
   }
 }
 
+const latestSyncCache = {};
+
 wss.on('connection', ws => {
   try {
     ws.send(JSON.stringify(lastStatusPayload));
+    for (const k of ['UPDATE_CONFIG', 'UPDATE_PROVINCES_STATE', 'SYNC_BGM_STATE']) {
+      if (latestSyncCache[k]) {
+        ws.send(JSON.stringify(latestSyncCache[k]));
+      }
+    }
   } catch (e) {}
   ws.on('message', raw => {
     try {
       const msg = JSON.parse(raw);
       if (msg.type === 'ADMIN_SYNC') {
+        if (
+          msg.action === 'UPDATE_CONFIG' ||
+          msg.action === 'UPDATE_PROVINCES_STATE' ||
+          msg.action === 'SYNC_BGM_STATE'
+        ) {
+          latestSyncCache[msg.action] = msg;
+        }
         broadcast(msg, ws);
       } else if (msg.type === 'CONNECT_TIKTOK' && msg.username) {
         connectTikTok(msg.username);

@@ -49,6 +49,8 @@ async function startServer() {
     });
   };
 
+  const latestSyncPackets: Record<string, any> = {};
+
   // Real-time SSE Stream for syncing Admin Tab -> OBS Browser Source (?obs=1)
   app.get('/api/sync-stream', (req: Request, res: Response) => {
     const clientId = String(req.query.clientId || Math.random());
@@ -62,6 +64,19 @@ async function startServer() {
     const clientObj = { id: clientId, role, res };
     clients.add(clientObj);
     broadcastPeerCount();
+
+    // Gửi ngay các gói trạng thái mới nhất (Config, Provinces, Nhạc nền BGM) khi màn hình Live kết nối
+    if (role === 'obs') {
+      for (const key of ['UPDATE_CONFIG', 'UPDATE_PROVINCES_STATE', 'SYNC_BGM_STATE']) {
+        if (latestSyncPackets[key]) {
+          try {
+            res.write(`data: ${JSON.stringify(latestSyncPackets[key])}\n\n`);
+          } catch {
+            // Ignore
+          }
+        }
+      }
+    }
 
     const keepAlive = setInterval(() => {
       try {
@@ -84,6 +99,14 @@ async function startServer() {
     if (!packet) {
       res.status(400).json({ ok: false });
       return;
+    }
+
+    if (
+      packet.action === 'UPDATE_CONFIG' ||
+      packet.action === 'UPDATE_PROVINCES_STATE' ||
+      packet.action === 'SYNC_BGM_STATE'
+    ) {
+      latestSyncPackets[packet.action] = packet;
     }
 
     const payloadStr = `data: ${JSON.stringify(packet)}\n\n`;

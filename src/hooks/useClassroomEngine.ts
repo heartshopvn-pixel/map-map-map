@@ -1287,6 +1287,9 @@ export function useClassroomEngine() {
       setPeerCounts(counts);
       if (!isObsView) {
         soundEngine.setRemoteSlaveMode(counts.obsPeers > 0);
+        if (counts.obsPeers > 0) {
+          soundEngine.broadcastBgmSync(true);
+        }
       }
     });
 
@@ -1400,11 +1403,14 @@ export function useClassroomEngine() {
         soundEngine.stopImmediate();
       } else if (action === 'CLEAR_TTS_QUEUE') {
         soundEngine.clearEventQueue();
+      } else if (action === 'SYNC_BGM_STATE') {
+        soundEngine.applyRemoteBgmSnapshot(payload);
       } else if (action === 'REQUEST_FULL_SYNC' && !isObsView) {
         syncService.sendCommand('UPDATE_CONFIG', { patch: configRef.current });
         syncService.sendCommand('UPDATE_PROVINCES_STATE', {
           provinces: provincesRef.current,
         });
+        soundEngine.broadcastBgmSync(true);
       }
     });
 
@@ -1851,6 +1857,7 @@ export function useClassroomEngine() {
     syncService.sendCommand('UPDATE_PROVINCES_STATE', {
       provinces: provincesRef.current,
     });
+    soundEngine.broadcastBgmSync(true);
   }, []);
 
   const handleSaveBackupJson = useCallback(() => {

@@ -10,6 +10,7 @@ import {
   resolveAvatarForUsername,
   SessionEndSummaryState,
 } from '../../hooks/useClassroomEngine';
+import { soundEngine } from '../../services/soundEngine';
 import {
   buildVietnamProvincePolygons,
   MAP_RENDER_OFFSET_X,
@@ -420,6 +421,16 @@ export const GameStage: React.FC<GameStageProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [stageScale, setStageScale] = useState(1);
+  const [bgmNeedsUnlock, setBgmNeedsUnlock] = useState(false);
+
+  useEffect(() => {
+    const unsubBgm = soundEngine.subscribeBgmState((snap) => {
+      setBgmNeedsUnlock(Boolean(snap.isPlaying && snap.needsUnlock));
+    });
+    return () => {
+      unsubBgm();
+    };
+  }, []);
 
   useEffect(() => {
     const updateScale = () => {
@@ -2105,6 +2116,18 @@ export const GameStage: React.FC<GameStageProps> = ({
                   })}
                 </div>
               </div>
+            </div>
+          )}
+
+          {bgmNeedsUnlock && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[90] pointer-events-auto">
+              <button
+                type="button"
+                onClick={() => soundEngine.unlockBgmPlayback()}
+                className="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-stone-950 font-black text-xs shadow-2xl border-2 border-white flex items-center gap-1.5 animate-bounce cursor-pointer"
+              >
+                <span>🔊 Bấm vào đây để phát Nhạc Nền Live</span>
+              </button>
             </div>
           )}
         </div>

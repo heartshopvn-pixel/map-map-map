@@ -51,6 +51,11 @@ class LiveSyncService {
     }
     this.initServerRelay();
     if (typeof window !== 'undefined') {
+      if (this.isObsView()) {
+        setTimeout(() => {
+          this.sendCommand('REQUEST_FULL_SYNC', {});
+        }, 180);
+      }
       setTimeout(() => {
         if (this.status === 'simulated' && !this.ws) {
           this.connectWebSocket('ws://localhost:8080');
@@ -161,6 +166,12 @@ class LiveSyncService {
         `/api/sync-stream?clientId=${encodeURIComponent(this.clientId)}&role=${role}`
       );
       this.eventSource = es;
+
+      es.onopen = () => {
+        if (isObs) {
+          this.sendCommand('REQUEST_FULL_SYNC', {});
+        }
+      };
 
       es.onmessage = (event) => {
         try {

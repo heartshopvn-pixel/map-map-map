@@ -213,17 +213,29 @@ export const TabAudio: React.FC<TabAudioProps> = ({
             </h2>
           </div>
 
-          <label className="px-2.5 py-1 rounded-lg bg-amber-400 hover:bg-amber-300 text-stone-950 text-[11px] font-extrabold flex items-center gap-1 cursor-pointer transition shadow">
-            <Upload className="w-3 h-3" />
-            <span>Load Nhạc Nền</span>
-            <input
-              type="file"
-              accept="audio/*,.mp3,.wav,.ogg,.m4a"
-              multiple
-              onChange={handleUploadBgmFiles}
-              className="hidden"
-            />
-          </label>
+          <div className="flex items-center gap-1.5">
+            {bgmSnap.tracks.length > 0 && (
+              <button
+                type="button"
+                onClick={() => soundEngine.broadcastBgmSync(true)}
+                title="Đẩy đồng bộ danh sách nhạc nền và trạng thái phát sang màn hình Live ngay lập tức"
+                className="px-2 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 text-emerald-200 text-[10.5px] font-bold flex items-center gap-1 cursor-pointer transition"
+              >
+                <span>📡 Đồng bộ Live</span>
+              </button>
+            )}
+            <label className="px-2.5 py-1 rounded-lg bg-amber-400 hover:bg-amber-300 text-stone-950 text-[11px] font-extrabold flex items-center gap-1 cursor-pointer transition shadow">
+              <Upload className="w-3 h-3" />
+              <span>Load Nhạc Nền</span>
+              <input
+                type="file"
+                accept="audio/*,.mp3,.wav,.ogg,.m4a"
+                multiple
+                onChange={handleUploadBgmFiles}
+                className="hidden"
+              />
+            </label>
+          </div>
         </div>
 
         {/* Chế độ phát: Lặp 1 bài vs Next liên tục (hết bài cuối quay lại bài đầu) */}
