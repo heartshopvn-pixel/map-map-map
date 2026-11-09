@@ -785,6 +785,7 @@ export const GameStage: React.FC<GameStageProps> = ({
   );
 
   // Đảm bảo cả Avatar To lẫn Avatar Nhỏ khi Zoom vào tỉnh đều có danh sách người chơi kèm ảnh thật
+  // Cộng dồn theo tên người chơi để nếu cùng 1 người vừa comment +1đ vừa tặng hoa thì chỉ hiện 1 Avatar To duy nhất!
   const activeBatchedSenders = useMemo<ProvinceContributor[]>(() => {
     if (!cameraFocus.provinceId) return [];
     const rawList =
@@ -805,14 +806,33 @@ export const GameStage: React.FC<GameStageProps> = ({
             },
           ];
 
-    return rawList.map((sender) => ({
-      ...sender,
-      avatarUrl: resolveAvatarForUsername(
+    const byUser = new Map<string, ProvinceContributor>();
+    for (const sender of rawList) {
+      const key = (sender.username || 'Người Chơi').toLowerCase();
+      const resolvedUrl = resolveAvatarForUsername(
         sender.username,
         sender.avatarUrl,
         npcAvatars
-      ),
-    }));
+      );
+      const prev = byUser.get(key);
+      if (prev) {
+        byUser.set(key, {
+          ...prev,
+          avatarUrl: resolvedUrl || prev.avatarUrl,
+          pointsAdded: prev.pointsAdded + (sender.pointsAdded || 0),
+          roseCount: (prev.roseCount || 0) + (sender.roseCount || 0),
+          isRose: Boolean(prev.isRose || sender.isRose),
+          timestamp: sender.timestamp || prev.timestamp,
+        });
+      } else {
+        byUser.set(key, {
+          ...sender,
+          avatarUrl: resolvedUrl,
+        });
+      }
+    }
+
+    return Array.from(byUser.values());
   }, [cameraFocus, focusedProvince, npcAvatars]);
 
   // Danh sách TẤT CẢ người chơi đã gửi điểm vào tỉnh này trong suốt phiên (lưu giữ tới khi hết phiên)
@@ -1450,11 +1470,13 @@ export const GameStage: React.FC<GameStageProps> = ({
                     );
                     return (
                       <div
-                        key={sender.id}
+                        key={`${
+                          cameraFocus.provinceId || 'demo'
+                        }_${sender.username.toLowerCase()}`}
                         className="flex flex-col items-center province-avatar-throw"
                       >
                         <div
-                          className="w-[80px] h-[80px] rounded-full p-[3px] shadow-[0_6px_24px_rgba(0,0,0,0.65)]"
+                          className="relative w-[80px] h-[80px] rounded-full p-[3px] shadow-[0_6px_24px_rgba(0,0,0,0.65)]"
                           style={{
                             background:
                               'linear-gradient(135deg, #f6e7a4 0%, #c8a24b 50%, #f3df8d 100%)',
@@ -1477,6 +1499,11 @@ export const GameStage: React.FC<GameStageProps> = ({
                               className="w-full h-full object-cover"
                             />
                           </div>
+                          {sender.pointsAdded > 0 && (
+                            <span className="absolute -bottom-1 right-0 px-1.5 py-0.5 rounded-full bg-[#FF6F61] border border-white text-[10px] font-mono font-black text-white leading-none shadow">
+                              +{sender.pointsAdded}đ
+                            </span>
+                          )}
                         </div>
                         <span
                           className="mt-1.5 text-xs font-extrabold text-white max-w-[105px] truncate text-center"

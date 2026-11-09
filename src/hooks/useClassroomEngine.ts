@@ -542,6 +542,38 @@ export function useClassroomEngine() {
   );
 
   /**
+   * Gộp danh sách người gửi theo tên (không phân biệt hoa/thường),
+   * giữ nguyên ID đầu tiên để Avatar to không bị tạo mới hay nhảy lại lần 2 khi cộng dồn bình luận +1đ và hoa hồng!
+   */
+  const mergeContributorsByUser = useCallback(
+    (
+      existingList: ProvinceContributor[],
+      incomingList: ProvinceContributor[]
+    ): ProvinceContributor[] => {
+      const map = new Map<string, ProvinceContributor>();
+      for (const item of [...existingList, ...incomingList]) {
+        const key = item.username.toLowerCase();
+        const prev = map.get(key);
+        if (prev) {
+          map.set(key, {
+            ...prev,
+            avatarUrl: item.avatarUrl || prev.avatarUrl,
+            pointsAdded: prev.pointsAdded + item.pointsAdded,
+            roseCount: (prev.roseCount || 0) + (item.roseCount || 0),
+            isRose: Boolean(prev.isRose || item.isRose),
+            isNpc: Boolean(prev.isNpc || item.isNpc),
+            timestamp: item.timestamp,
+          });
+        } else {
+          map.set(key, { ...item });
+        }
+      }
+      return Array.from(map.values());
+    },
+    []
+  );
+
+  /**
    * Bộ điều phối Camera hỗ trợ 2 chế độ:
    * 1. 'continuous' (Phản ứng liên tục - mặc định): Nhảy thẳng sang tỉnh kế tiếp trong hàng chờ
    * 2. 'alternating_overview' (Xen kẽ zoom tổng): Sau mỗi lượt tỉnh, zoom nhanh ra Map tổng rồi mới zoom vào tỉnh mới
@@ -612,19 +644,21 @@ export function useClassroomEngine() {
         cameraQueueRef.current = remainingQueue;
         setCameraQueue(remainingQueue);
 
-        const mergedSenders: ProvinceContributor[] = [];
+        const rawSenders: ProvinceContributor[] = [];
         let mergedPoints = 0;
         let mergedRoses = 0;
         let mergedGifts = 0;
         let anyRose = false;
 
         for (const item of sameProvinceItems) {
-          mergedSenders.push(...item.senders);
+          rawSenders.push(...item.senders);
           mergedPoints += item.pointsAdded;
           mergedRoses += item.totalRoses;
           mergedGifts += item.totalGifts;
           if (item.isRose) anyRose = true;
         }
+
+        const mergedSenders = mergeContributorsByUser([], rawSenders);
 
         const uniqueSenderNames = Array.from(
           new Set(mergedSenders.map((s) => s.username))
@@ -682,7 +716,7 @@ export function useClassroomEngine() {
     }, 85);
 
     return () => clearInterval(timer);
-  }, [commitGiftTurnToProvinceAndTTS, spawnThrowAvatarFX]);
+  }, [commitGiftTurnToProvinceAndTTS, mergeContributorsByUser, spawnThrowAvatarFX]);
 
   /**
    * Luồng Kết Thúc Phiên Chơi & Chuyển Sang Vòng Mới:
@@ -954,6 +988,7 @@ export function useClassroomEngine() {
       };
 
       // Hàm phụ trợ: Đưa vào hàng chờ Camera và TỰ ĐỘNG GOM TẤT CẢ NGƯỜI CÙNG TỈNH vào 1 lượt
+      // (Nếu cùng 1 người vừa comment +1đ vừa tặng hoa thì cộng dồn vào 1 avatar duy nhất!)
       const enqueueAndMergeSameProvince = () => {
         setCameraQueue((prev) => {
           const existingIdx = prev.findIndex(
@@ -962,7 +997,9 @@ export function useClassroomEngine() {
           if (existingIdx !== -1) {
             const next = [...prev];
             const targetItem = next[existingIdx];
-            const mergedSenders = [...targetItem.senders, contributor];
+            const mergedSenders = mergeContributorsByUser(targetItem.senders, [
+              contributor,
+            ]);
             const uniqueNames = Array.from(
               new Set(mergedSenders.map((s) => s.username))
             );
@@ -1000,12 +1037,65 @@ export function useClassroomEngine() {
           (now < curFocus.until ||
             soundEngine.isSpeakingOrQueuedForProvince(curFocus.provinceId!));
 
-        // Trường hợp 1: Camera đang rảnh ở Map tổng -> Cộng điểm + đọc TTS + Zoom vào ngay
+        // Trường hợp 1: Camera ĐANG đứng ở đúng tỉnh này (ví dụ người chơi vừa comment +1đ và tặng hoa ngay tiếp theo)
+        // -> Cộng dồn thẳng vào 1 Avatar duy nhất của người chơi đó, KHÔNG tạo thêm avatar thứ 2 và KHÔNG làm avatar to nhảy lại lần 2!
         if (
+          curFocus.provinceId === targetProv.id &&
+          (curProvinceStillActive || cameraQueueRef.current.length === 0)
+        ) {
+          commitGiftTurnToProvinceAndTTS(
+            targetProv.id,
+            targetProv.name,
+            [contributor],
+            pointsAdded,
+            roseCount,
+            1
+          );
+
+          const prevSenders = curFocus.senders || [];
+          const alreadyHadThisUser = prevSenders.some(
+            (s) => s.username.toLowerCase() === userKey
+          );
+          const nextSenders = mergeContributorsByUser(prevSenders, [
+            contributor,
+          ]);
+          const nextPoints = (curFocus.pointsAdded || 0) + pointsAdded;
+          const nextRoses = (curFocus.totalRoses || 0) + roseCount;
+          const nextGifts = (curFocus.totalGifts || 1) + 1;
+
+          const extendedFocus: CameraFocusState = {
+            ...curFocus,
+            username: cleanUser,
+            avatarUrl,
+            avatarColor,
+            pointsAdded: nextPoints,
+            isRose: Boolean(curFocus.isRose || payload.isRose),
+            senders: nextSenders,
+            totalRoses: nextRoses,
+            totalGifts: nextGifts,
+            until: Math.max(curFocus.until, now + 1350),
+          };
+          cameraFocusRef.current = extendedFocus;
+          setCameraFocus(extendedFocus);
+
+          if (!alreadyHadThisUser) {
+            spawnThrowAvatarFX({
+              provinceId: targetProv.id,
+              provinceName: targetProv.name,
+              senders: [contributor],
+            });
+          } else {
+            soundEngine.playGiftThrowSfx(
+              payload.isRose,
+              configRef.current.sfxVolume
+            );
+          }
+        } else if (
           !inOverviewPause &&
           !curProvinceStillActive &&
           cameraQueueRef.current.length === 0
         ) {
+          // Trường hợp 2: Camera đang rảnh ở Map tổng -> Cộng điểm + đọc TTS + Zoom vào ngay
           commitGiftTurnToProvinceAndTTS(
             targetProv.id,
             targetProv.name,
@@ -1042,45 +1132,6 @@ export function useClassroomEngine() {
               senders: [contributor],
             });
           }, 120);
-        } else if (
-          curFocus.provinceId === targetProv.id &&
-          curProvinceStillActive
-        ) {
-          // Trường hợp 2: Camera đang Zoom đúng tỉnh này (hoặc vẫn đang đọc sự kiện tỉnh này) -> Gom thêm người chơi vào cùng tỉnh ngay lập tức!
-          commitGiftTurnToProvinceAndTTS(
-            targetProv.id,
-            targetProv.name,
-            [contributor],
-            pointsAdded,
-            roseCount,
-            1
-          );
-
-          const prevSenders = curFocus.senders || [];
-          const nextSenders = [...prevSenders, contributor];
-          const nextPoints = (curFocus.pointsAdded || 0) + pointsAdded;
-          const nextRoses = (curFocus.totalRoses || 0) + roseCount;
-          const nextGifts = (curFocus.totalGifts || 1) + 1;
-
-          const extendedFocus: CameraFocusState = {
-            ...curFocus,
-            username: cleanUser,
-            avatarUrl,
-            avatarColor,
-            pointsAdded: nextPoints,
-            isRose: Boolean(curFocus.isRose || payload.isRose),
-            senders: nextSenders,
-            totalRoses: nextRoses,
-            totalGifts: nextGifts,
-            until: Math.max(curFocus.until, now + 1350),
-          };
-          cameraFocusRef.current = extendedFocus;
-          setCameraFocus(extendedFocus);
-          spawnThrowAvatarFX({
-            provinceId: targetProv.id,
-            provinceName: targetProv.name,
-            senders: [contributor],
-          });
         } else {
           // Trường hợp 3: Đưa vào hàng chờ Camera & tự động gộp tất cả người cùng tỉnh để khi tới lượt đọc 1 lần hết sạch!
           enqueueAndMergeSameProvince();
@@ -1115,7 +1166,7 @@ export function useClassroomEngine() {
       }
       return { ok: true };
     },
-    [commitGiftTurnToProvinceAndTTS, spawnThrowAvatarFX]
+    [commitGiftTurnToProvinceAndTTS, mergeContributorsByUser, spawnThrowAvatarFX]
   );
 
   // Xử lý bình luận từ người chơi (TikTok Live hoặc Test)
