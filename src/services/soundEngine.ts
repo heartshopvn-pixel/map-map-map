@@ -1485,8 +1485,21 @@ class SoundService {
   ) {
     this.latestConfig = config;
     const savedGiftItems = this.ttsQueue.filter((q) => Boolean(q.meta?.isRose));
+    const discardedNonGiftCallbacks = [
+      !this.activeEventItem?.meta?.isRose ? this.activeEventItem?.onDone : undefined,
+      ...this.ttsQueue
+        .filter((q) => !q.meta?.isRose)
+        .map((q) => q.onDone),
+    ].filter(Boolean) as Array<() => void>;
     this.ttsQueue = [];
     this.stopCurrentUtteranceOnly();
+    for (const cb of discardedNonGiftCallbacks) {
+      try {
+        cb();
+      } catch {
+        // Ignore
+      }
+    }
     this.playSessionEndFanfareSfx(config.sfxVolume);
 
     if (!config.ttsEnabled) {
@@ -1884,93 +1897,8 @@ class SoundService {
       isPriority || meta?.isRose || meta?.isSpecialGift
     );
 
-    // Chỉ gom gộp các lượt bình luận 1 điểm (!isRose, !isNpc) của người chơi thật vào cùng tỉnh.
-    // TUYỆT ĐỐI KHÔNG tự ý cộng dồn các mục tặng hoa hồng / quà (isRose) trong ttsQueue!
-    if (
-      meta?.provinceId &&
-      meta?.provinceName &&
-      !meta.isNpc &&
-      !meta.isRose &&
-      !meta.isSpecialGift
-    ) {
-      const incomingNames =
-        meta.usernamesList && meta.usernamesList.length > 0
-          ? meta.usernamesList
-          : meta.username
-          ? [meta.username]
-          : [];
-
-      const existingIdx = this.ttsQueue.findIndex(
-        (q) =>
-          !q.isTurboBatch &&
-          !q.isSessionSummary &&
-          !q.meta?.isNpc &&
-          !q.meta?.isRose &&
-          !q.meta?.isSpecialGift &&
-          q.meta?.provinceId === meta.provinceId
-      );
-
-      if (existingIdx !== -1 && incomingNames.length > 0) {
-        const existing = this.ttsQueue[existingIdx];
-        const prevNames: string[] = existing.meta?.usernamesList || [
-          existing.meta?.username || 'Người chơi',
-        ];
-        const nextNames = Array.from(new Set([...prevNames, ...incomingNames]));
-        const prevPoints = Number(existing.meta?.pointsAdded || 1);
-        const nextPoints = prevPoints + Number(meta.pointsAdded || 1);
-
-        const mergedText = this.formatBatchedProvinceGiftSpeech(
-          nextNames,
-          meta.provinceName,
-          nextPoints,
-          0,
-          config,
-          false,
-          false
-        );
-
-        const prevOnStart = existing.onStart;
-        const combinedOnStart =
-          prevOnStart && onStart
-            ? () => {
-                prevOnStart();
-                onStart();
-              }
-            : onStart || prevOnStart;
-
-        const prevOnDone = existing.onDone;
-        const combinedOnDone =
-          prevOnDone && onDone
-            ? () => {
-                prevOnDone();
-                onDone();
-              }
-            : onDone || prevOnDone;
-
-        this.ttsQueue[existingIdx] = {
-          ...existing,
-          text: mergedText,
-          isPriority: false,
-          onStart: combinedOnStart,
-          onDone: combinedOnDone,
-          meta: {
-            ...existing.meta,
-            username: nextNames.join(', '),
-            usernamesList: nextNames,
-            shortLabel: nextNames.join(', '),
-            pointsAdded: nextPoints,
-            isRose: false,
-            isSpecialGift: false,
-            isNpc: false,
-            totalRoses: 0,
-          },
-        };
-        this.emitEventQueue();
-        this.processQueue(config);
-        return true;
-      }
-    }
-
+    // Giữ nguyên từng lượt bình luận (+1đ) và từng lượt tặng quà riêng biệt trong ttsQueue
+    // để mọi bình luận của người chơi đều hiển thị đầy đủ trong Bảng Hàng Chờ Đọc, không bị gộp ẩn làm mất lượt!
     const defaultShortLabel = meta?.shortLabel
       ? meta.shortLabel
       : meta?.username
@@ -2178,102 +2106,7 @@ class SoundService {
       return;
     }
 
-    let nextItem = this.ttsQueue.shift()!;
-
-    // Mỗi lần bắt đầu đọc: chỉ gộp các mục bình luận 1 điểm (!isRose, !isNpc) vào cùng tỉnh.
-    // Các mục tặng hoa hồng / quà (isRose = true) hoặc NPC được giữ nguyên từng lượt để đọc chính xác số lượng hoa tặng!
-    if (
-      !nextItem.isTurboBatch &&
-      !nextItem.isSessionSummary &&
-      !nextItem.meta?.isRose &&
-      !nextItem.meta?.isSpecialGift &&
-      !nextItem.meta?.isNpc &&
-      nextItem.meta?.provinceId &&
-      nextItem.meta?.provinceName
-    ) {
-      const targetProvId = nextItem.meta.provinceId;
-      const sameProvItems = this.ttsQueue.filter(
-        (q) =>
-          !q.isTurboBatch &&
-          !q.isSessionSummary &&
-          !q.meta?.isRose &&
-          !q.meta?.isSpecialGift &&
-          !q.meta?.isNpc &&
-          q.meta?.provinceId === targetProvId
-      );
-      if (sameProvItems.length > 0) {
-        const pickedIds = new Set(sameProvItems.map((q) => q.id));
-        this.ttsQueue = this.ttsQueue.filter((q) => !pickedIds.has(q.id));
-        const allNames = new Set<string>(
-          nextItem.meta.usernamesList ||
-            (nextItem.meta.username ? [nextItem.meta.username] : [])
-        );
-        let totalPts = Number(nextItem.meta.pointsAdded || 1);
-        const startCbs = [nextItem.onStart];
-        const doneCbs = [nextItem.onDone];
-
-        for (const extra of sameProvItems) {
-          const extraNames =
-            extra.meta?.usernamesList ||
-            (extra.meta?.username ? [extra.meta.username] : []);
-          for (const n of extraNames) {
-            allNames.add(n);
-          }
-          totalPts += Number(extra.meta?.pointsAdded || 1);
-          if (extra.onStart) startCbs.push(extra.onStart);
-          if (extra.onDone) doneCbs.push(extra.onDone);
-        }
-
-        const mergedList = Array.from(allNames);
-        const combinedSpeech = this.formatBatchedProvinceGiftSpeech(
-          mergedList,
-          nextItem.meta.provinceName,
-          totalPts,
-          0,
-          config,
-          false,
-          false
-        );
-
-        nextItem = {
-          ...nextItem,
-          text: combinedSpeech,
-          onStart: () => {
-            for (const cb of startCbs) {
-              if (cb) {
-                try {
-                  cb();
-                } catch {
-                  // Ignore
-                }
-              }
-            }
-          },
-          onDone: () => {
-            for (const cb of doneCbs) {
-              if (cb) {
-                try {
-                  cb();
-                } catch {
-                  // Ignore
-                }
-              }
-            }
-          },
-          meta: {
-            ...nextItem.meta,
-            username: mergedList.join(', '),
-            usernamesList: mergedList,
-            shortLabel: mergedList.join(', '),
-            pointsAdded: totalPts,
-            totalRoses: 0,
-            isRose: false,
-            isSpecialGift: false,
-            isNpc: false,
-          },
-        };
-      }
-    }
+    const nextItem = this.ttsQueue.shift()!;
 
     const nextText = nextItem.text;
     const itemStartCallback = nextItem.onStart;

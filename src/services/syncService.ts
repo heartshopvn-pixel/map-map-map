@@ -17,7 +17,11 @@ type TikTokEventListener = (event: {
   likeCount?: number;
 }) => void;
 type StatusListener = (status: WsConnectionStatus) => void;
-type PeerCountListener = (counts: { totalPeers: number; obsPeers: number }) => void;
+type PeerCountListener = (counts: {
+  totalPeers: number;
+  obsPeers: number;
+  adminPeers?: number;
+}) => void;
 
 class LiveSyncService {
   private clientId = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -144,9 +148,12 @@ class LiveSyncService {
     const cleanCoins = Math.max(1, Number(ev.coins ?? cleanCount) || 1);
     const dedupKey = `${ev.type}:${(ev.username || '').trim().toLowerCase()}:${normalizedGiftOrComment}:${cleanCoins}:${cleanCount}`;
 
-    // 1. Chặn trùng lặp khi sự kiện đi qua cả WebSocket 8080 lẫn Cloud Webhook SSE (< 2500ms)
+    // 1. Chặn trùng lặp khi cùng 1 sự kiện đi qua cả WebSocket 8080 lẫn Cloud Webhook SSE:
+    // - Với bình luận (chat): chỉ chặn bản sao tức thời trong < 350ms để không khóa người xem bình luận lặp lại
+    // - Với quà tặng / sự kiện khác: chặn trong < 2500ms
     const prevAt = this.recentTikTokEventKeys.get(dedupKey);
-    if (prevAt && now - prevAt < 2500) {
+    const dedupWindowMs = ev.type === 'chat' ? 350 : 2500;
+    if (prevAt && now - prevAt < dedupWindowMs) {
       return;
     }
     this.recentTikTokEventKeys.set(dedupKey, now);
@@ -214,8 +221,14 @@ class LiveSyncService {
         try {
           const data = JSON.parse(event.data);
           if (data.type === 'PEER_STATUS') {
+            const totalPeers = data.totalPeers || 1;
+            const obsPeers = data.obsPeers || 0;
+            const adminPeers =
+              typeof data.adminPeers === 'number'
+                ? data.adminPeers
+                : Math.max(0, totalPeers - obsPeers);
             this.peerListeners.forEach((fn) =>
-              fn({ totalPeers: data.totalPeers || 1, obsPeers: data.obsPeers || 0 })
+              fn({ totalPeers, obsPeers, adminPeers })
             );
           } else if (data.type === 'ADMIN_SYNC') {
             this.dispatchIncomingSync(data as SyncPacket);

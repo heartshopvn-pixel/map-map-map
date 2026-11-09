@@ -332,7 +332,9 @@ export interface SyncPacket {
     | 'SYNC_LIVE_TTS_SNAPSHOT'
     | 'REQUEST_FULL_SYNC'
     | 'RESTORE_BACKUP'
-    | 'SYNC_BGM_STATE';
+    | 'SYNC_BGM_STATE'
+    | 'MASTER_HEARTBEAT'
+    | 'MASTER_CLOSED';
   payload: Record<string, any>;
   ts: number;
 }

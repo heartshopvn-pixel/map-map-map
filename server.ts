@@ -34,11 +34,13 @@ async function startServer() {
 
   const broadcastPeerCount = () => {
     const obsCount = Array.from(clients).filter((c) => c.role === 'obs').length;
+    const adminCount = Array.from(clients).filter((c) => c.role !== 'obs').length;
     const totalCount = clients.size;
     const msg = `data: ${JSON.stringify({
       type: 'PEER_STATUS',
       totalPeers: totalCount,
       obsPeers: obsCount,
+      adminPeers: adminCount,
     })}\n\n`;
     clients.forEach((c) => {
       try {
@@ -101,8 +103,20 @@ async function startServer() {
       return;
     }
 
-    if (
-      packet.action === 'UPDATE_CONFIG' ||
+    if (packet.action === 'UPDATE_CONFIG') {
+      const prevPacket = latestSyncPackets['UPDATE_CONFIG'];
+      const mergedPatch = {
+        ...(prevPacket?.payload?.patch || {}),
+        ...(packet.payload?.patch || {}),
+      };
+      latestSyncPackets['UPDATE_CONFIG'] = {
+        ...packet,
+        payload: {
+          ...packet.payload,
+          patch: mergedPatch,
+        },
+      };
+    } else if (
       packet.action === 'UPDATE_PROVINCES_STATE' ||
       packet.action === 'SYNC_BGM_STATE'
     ) {

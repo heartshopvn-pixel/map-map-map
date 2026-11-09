@@ -229,7 +229,8 @@ export default function App() {
           onSimulateComment={engine.handleUserComment}
           onTriggerRandomGift={engine.handleTriggerRandomGift}
           onTriggerBatchSameProvince={engine.handleTriggerBatchSameProvince}
-          onResetAllProvinces={engine.handleResetAllProvinces}
+          onResetAllProvinces={() => engine.handleResetAllProvinces(false, false)}
+          onResetRoundAndTop3={engine.handleResetRoundAndTop3}
           onSetProvincePoints={engine.handleSetProvincePoints}
           onRenameProvince={engine.handleRenameProvince}
           cameraFocus={engine.cameraFocus}

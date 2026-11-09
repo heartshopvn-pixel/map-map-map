@@ -73,13 +73,14 @@ interface DevStudioProps {
     roseCountOverride?: number,
     isSpecialGift?: boolean,
     giftCoinsOverride?: number
-  ) => void;
+  ) => { ok: boolean; reason?: string } | void;
   onTriggerBatchSameProvince: (
     provinceId?: string,
     senderCount?: number,
     isRose?: boolean
   ) => void;
   onResetAllProvinces: () => void;
+  onResetRoundAndTop3?: () => void;
   onSetProvincePoints: (provinceId: string, points: number) => void;
   onRenameProvince: (provinceId: string, newName: string) => void;
   cameraFocus: CameraFocusState;
@@ -155,6 +156,7 @@ export const DevStudio: React.FC<DevStudioProps> = ({
   onTriggerRandomGift,
   onTriggerBatchSameProvince,
   onResetAllProvinces,
+  onResetRoundAndTop3,
   onSetProvincePoints,
   onRenameProvince,
   cameraFocus,
@@ -359,6 +361,7 @@ export const DevStudio: React.FC<DevStudioProps> = ({
             onTriggerRandomGift={onTriggerRandomGift}
             onTriggerBatchSameProvince={onTriggerBatchSameProvince}
             onResetAllProvinces={onResetAllProvinces}
+            onResetRoundAndTop3={onResetRoundAndTop3}
             onFocusProvince={onFocusProvince}
             onTriggerTurboBatchRead={onTriggerTurboBatchRead}
             onToggleTurboReadMode={onToggleTurboReadMode}

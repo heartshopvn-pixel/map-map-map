@@ -259,7 +259,8 @@ export function useClassroomEngine() {
   const [peerCounts, setPeerCounts] = useState<{
     totalPeers: number;
     obsPeers: number;
-  }>({ totalPeers: 1, obsPeers: 0 });
+    adminPeers?: number;
+  }>({ totalPeers: 1, obsPeers: 0, adminPeers: isObsView ? 0 : 1 });
 
   const [isLocalTabMuted, setIsLocalTabMuted] = useState<boolean>(() =>
     soundEngine.isTabMuted()
@@ -327,6 +328,12 @@ export function useClassroomEngine() {
   // Chống nhân đôi sự kiện quà tặng / bình luận khi đồng bộ đa luồng hoặc bấm đúp
   const processedGiftEventIdsRef = useRef<Set<string>>(new Set());
   const recentGiftFingerprintMapRef = useRef<Map<string, number>>(new Map());
+  const recentTikTokCrossSourceRef = useRef<
+    Map<string, { at: number; source: 'direct' | 'relay' }>
+  >(new Map());
+  const peerCountsRef = useRef(peerCounts);
+  peerCountsRef.current = peerCounts;
+  const lastMasterSeenAtRef = useRef<number>(0);
 
   // Lưu mốc thời gian nghỉ ở Map tổng giữa 2 lượt khi ở chế độ 2 (alternating_overview)
   const overviewPauseUntilRef = useRef<number>(0);
@@ -769,20 +776,23 @@ export function useClassroomEngine() {
       );
       if (!targetProv) return { ok: false, reason: 'province_not_found' };
 
+      const payloadWithRawKey = payload as typeof payload & {
+        rawUserKey?: string;
+        fromTikTokLive?: boolean;
+      };
       const cleanUser = (payload.username || 'Người Chơi').trim();
-      const userKey = cleanUser.toLowerCase();
+      const userKey = (payloadWithRawKey.rawUserKey || cleanUser).toLowerCase();
       const isFromNpc = Boolean(payload.isNpc);
       const isSpecialGift = Boolean(payload.isSpecialGift);
+      const isFromTikTokLive = Boolean(payloadWithRawKey.fromTikTokLive);
       const now = Date.now();
 
       // Luôn ghi nhớ tỉnh người chơi chọn để khi họ tặng quà sẽ cộng về đúng tỉnh đó
       userProvinceMemoryRef.current.set(userKey, targetProv.id);
 
-      // Nếu đang ở bảng tổng kết cuối phiên: bỏ qua bình luận 1 điểm (không khóa lượt comment của họ ở vòng mới),
-      // chỉ giữ lại quà tặng (isRose = true) trong hàng chờ cho vòng mới!
-      if (isSessionEndingRef.current && !payload.isRose) {
-        return { ok: false, reason: 'session_ending_comment_ignored' };
-      }
+      // Lưu ý: Không chặn bình luận khi đang phát bảng tổng kết cuối phiên (isSessionEndingRef.current),
+      // vì câu tổng kết (isSessionSummary) đã nằm ở đầu ttsQueue — bình luận mới sẽ tự động xếp phía sau
+      // để đọc ngay khi bước sang vòng mới mà không làm người chơi bị mất lượt!
 
       // 1. Chống thực thi trùng lặp theo eventId
       const eventId =
@@ -832,16 +842,47 @@ export function useClassroomEngine() {
         return { ok: false, reason: 'already_commented_in_session' };
       }
 
-      // 2. Chống bị bắn đúp cùng 1 gói quà / bình luận do mạng gửi lặp gói tin
-      const commentSeqTag = payload.isRose ? 'R' : `C${currentProvinceCommentCount + 1}`;
-      const fingerprint = `${userKey}:${targetProv.id}:${commentSeqTag}:${isSpecialGift ? 'S' : 'N'}:${pointsAdded}:${roseCount}:${isFromNpc ? 'N' : 'U'}`;
-      const lastExecAt =
-        recentGiftFingerprintMapRef.current.get(fingerprint) || 0;
-      const throttleWindowMs = broadcastSync ? 250 : 3500;
-      if (now - lastExecAt < throttleWindowMs) {
-        return { ok: false, reason: 'duplicate_gift_throttled' };
+      // 1b. Chống chạy đúp khi cả Chrome lẫn OBS đều mở và cùng nhận 1 sự kiện TikTok Live
+      // (1 bản từ luồng trực tiếp 'direct' onTikTokEvent và 1 bản từ 'relay' SEND_PROVINCE_GIFT)
+      // Nếu chỉ mở riêng OBS (tắt Chrome), OBS nhận 'direct' và chạy bình thường 100%!
+      if (isFromTikTokLive) {
+        const currentSource: 'direct' | 'relay' = broadcastSync
+          ? 'direct'
+          : 'relay';
+        const crossKey = `${userKey}:${targetProv.id}:${payload.isRose ? 'G' : 'C'}:${pointsAdded}:${roseCount}`;
+        const prevCross = recentTikTokCrossSourceRef.current.get(crossKey);
+        if (
+          prevCross &&
+          prevCross.source !== currentSource &&
+          now - prevCross.at < 2200
+        ) {
+          return { ok: false, reason: 'cross_tab_tiktok_echo_ignored' };
+        }
+        recentTikTokCrossSourceRef.current.set(crossKey, {
+          at: now,
+          source: currentSource,
+        });
+        if (recentTikTokCrossSourceRef.current.size > 200) {
+          for (const [k, v] of recentTikTokCrossSourceRef.current.entries()) {
+            if (now - v.at > 4000) {
+              recentTikTokCrossSourceRef.current.delete(k);
+            }
+          }
+        }
       }
-      recentGiftFingerprintMapRef.current.set(fingerprint, now);
+
+      // 2. Chống bị bắn đúp cùng 1 gói quà tặng (isRose) do mạng gửi lặp gói tin
+      // (Không áp dụng throttle này cho bình luận +1đ để người chơi bình luận liên tiếp không bao giờ bị nuốt lượt)
+      if (payload.isRose) {
+        const fingerprint = `${userKey}:${targetProv.id}:R:${isSpecialGift ? 'S' : 'N'}:${pointsAdded}:${roseCount}:${isFromNpc ? 'N' : 'U'}`;
+        const lastExecAt =
+          recentGiftFingerprintMapRef.current.get(fingerprint) || 0;
+        const throttleWindowMs = broadcastSync ? 250 : 3500;
+        if (now - lastExecAt < throttleWindowMs) {
+          return { ok: false, reason: 'duplicate_gift_throttled' };
+        }
+        recentGiftFingerprintMapRef.current.set(fingerprint, now);
+      }
 
       if (!payload.isRose && !isFromNpc) {
         sessionProvinceCommentCountsRef.current.set(
@@ -887,7 +928,9 @@ export function useClassroomEngine() {
       );
 
       // Khi giọng đọc AI bắt đầu đọc mục này -> Cộng điểm + điều khiển Camera chạy theo giọng đọc!
+      let hasVoiceStarted = false;
       const handleVoiceStart = () => {
+        hasVoiceStarted = true;
         const startNow = Date.now();
         commitPointsOnlyToProvince(
           targetProv.id,
@@ -1005,6 +1048,20 @@ export function useClassroomEngine() {
       };
 
       const handleVoiceDone = () => {
+        // Nếu mục bình luận này bị xóa khỏi hàng chờ trước khi kịp đọc (chưa cộng điểm),
+        // hoàn trả lại lượt comment cho người chơi để họ bình luận lại ngay lập tức!
+        if (!hasVoiceStarted && !payload.isRose && !isFromNpc) {
+          const curCount =
+            sessionProvinceCommentCountsRef.current.get(userProvinceKey) || 0;
+          if (curCount <= 1) {
+            sessionProvinceCommentCountsRef.current.delete(userProvinceKey);
+          } else {
+            sessionProvinceCommentCountsRef.current.set(
+              userProvinceKey,
+              curCount - 1
+            );
+          }
+        }
         if (cameraFocusRef.current.provinceId === targetProv.id) {
           const tailHoldMs =
             configRef.current.cameraMode === 'alternating_overview' ? 180 : 420;
@@ -1060,6 +1117,8 @@ export function useClassroomEngine() {
           eventId,
           provinceId: targetProv.id,
           username: cleanUser,
+          rawUserKey: userKey,
+          fromTikTokLive: isFromTikTokLive,
           avatarUrl,
           isRose: payload.isRose,
           isSpecialGift,
@@ -1082,8 +1141,13 @@ export function useClassroomEngine() {
       rawComment: string,
       avatarUrl?: string | null,
       forceProvinceId?: string,
-      forceIsRose?: boolean
+      forceIsRose?: boolean,
+      fromTikTokLive = false
     ) => {
+      const matchedProvince = forceProvinceId
+        ? provincesRef.current.find((p) => p.id === forceProvinceId) || null
+        : matchProvinceFromComment(rawComment, provincesRef.current);
+
       const inspection = inspectUserInteraction(
         rawUsername || 'Người Chơi',
         rawComment || '',
@@ -1096,11 +1160,6 @@ export function useClassroomEngine() {
         setSafetyLogs((prev) => [...inspection.logEntries, ...prev].slice(0, 60));
       }
       if (!inspection.allowed) return false;
-
-      const matchedProvince = forceProvinceId
-        ? provincesRef.current.find((p) => p.id === forceProvinceId) || null
-        : matchProvinceFromComment(rawComment, provincesRef.current);
-
       if (!matchedProvince) return false;
 
       const isRose =
@@ -1108,14 +1167,17 @@ export function useClassroomEngine() {
           ? forceIsRose
           : isRoseKeywordInText(rawComment);
 
+      const rawUserClean = (rawUsername || 'Người Chơi').trim();
       const res = executeProvinceGift(
         {
           provinceId: matchedProvince.id,
           username: inspection.safeUsername,
+          rawUserKey: rawUserClean.toLowerCase(),
+          fromTikTokLive,
           avatarUrl: avatarUrl || null,
           isRose,
           isNpc: false,
-        },
+        } as Parameters<typeof executeProvinceGift>[0],
         true
       );
       return res.ok;
@@ -1184,6 +1246,8 @@ export function useClassroomEngine() {
           eventId: deterministicEventId,
           provinceId: targetProvinceId,
           username: safeName,
+          rawUserKey: (rawUsername || safeName).trim().toLowerCase(),
+          fromTikTokLive: true,
           avatarUrl: avatarUrl || null,
           isRose: true,
           isSpecialGift,
@@ -1191,7 +1255,7 @@ export function useClassroomEngine() {
           isNpc: false,
           pointsOverride: totalPoints,
           roseCountOverride: flowerCount,
-        },
+        } as Parameters<typeof executeProvinceGift>[0],
         true
       );
     },
@@ -1199,24 +1263,33 @@ export function useClassroomEngine() {
   );
 
   // Lắng nghe sự kiện TikTok Live & đồng bộ nhiều tab / OBS
+  // Cho phép màn hình OBS (?view=live / ?obs=1) hoạt động độc lập 100% ngay cả khi KHÔNG mở bảng Dev trên Chrome!
   useEffect(() => {
     const unsubStatus = syncService.onStatusChange((st) => setWsStatus(st));
     const unsubPeers = syncService.onPeerCountChange((counts) => {
       setPeerCounts(counts);
+      peerCountsRef.current = counts;
+      if ((counts.adminPeers ?? 0) === 0) {
+        lastMasterSeenAtRef.current = 0;
+      } else {
+        lastMasterSeenAtRef.current = Date.now();
+      }
       if (!isObsView && counts.obsPeers > 0) {
         soundEngine.broadcastBgmSync(true);
       }
     });
 
     const unsubTikTok = syncService.onTikTokEvent((ev) => {
-      // Nếu đang ở màn hình Live (OBS Slave), nhận lệnh đồng bộ từ Studio Master qua SEND_PROVINCE_GIFT để tránh chạy đúp 2 lần
-      if (isObsView) return;
-
+      // Xử lý trực tiếp trên cả OBS (?view=live) lẫn Chrome để khi tắt Chrome thì OBS vẫn tự bắt comment, quà tặng & thêm vào hàng chờ đọc bình thường!
+      // (Nếu cả Chrome và OBS cùng mở, cơ chế recentTikTokCrossSourceRef trong executeProvinceGift sẽ tự động chặn bản sao relay để không bao giờ bị đọc đúp 2 lần)
       if (ev.type === 'chat' && ev.comment) {
         handleUserComment(
           ev.username,
           ev.comment,
-          ev.avatarUrl || ev.profilePictureUrl || null
+          ev.avatarUrl || ev.profilePictureUrl || null,
+          undefined,
+          undefined,
+          true
         );
       } else if (ev.type === 'gift') {
         handleUserGift(
@@ -1255,12 +1328,24 @@ export function useClassroomEngine() {
 
     const unsubSync = syncService.onSync((packet) => {
       const { action, payload } = packet;
+      if (isObsView && action !== 'REQUEST_FULL_SYNC') {
+        if (action === 'MASTER_CLOSED') {
+          lastMasterSeenAtRef.current = 0;
+          return;
+        }
+        lastMasterSeenAtRef.current = Date.now();
+        if (action === 'MASTER_HEARTBEAT') {
+          return;
+        }
+      }
       if (action === 'SEND_PROVINCE_GIFT') {
         executeProvinceGift(
           {
             eventId: payload.eventId,
             provinceId: payload.provinceId,
             username: payload.username,
+            rawUserKey: payload.rawUserKey,
+            fromTikTokLive: Boolean(payload.fromTikTokLive),
             avatarUrl: payload.avatarUrl,
             isRose: Boolean(payload.isRose),
             isSpecialGift: Boolean(payload.isSpecialGift),
@@ -1269,12 +1354,20 @@ export function useClassroomEngine() {
             pointsOverride: payload.pointsOverride,
             roseCountOverride: payload.roseCountOverride,
             bypassCommentLimit: true,
-          },
+          } as Parameters<typeof executeProvinceGift>[0],
           false
         );
       } else if (action === 'RESET_ALL_PROVINCES') {
         sessionProvinceCommentCountsRef.current.clear();
         recentGiftFingerprintMapRef.current.clear();
+        isSessionEndingRef.current = false;
+        setSessionEndSummary(null);
+        if (payload?.resetRoundToOne) {
+          setConfig((prev) => ({
+            ...prev,
+            roundNumber: 1,
+          }));
+        }
         const fresh = createInitialProvinces().map((baseProv) => {
           const cur = provincesRef.current.find((p) => p.id === baseProv.id);
           return {
@@ -1356,8 +1449,12 @@ export function useClassroomEngine() {
       } else if (action === 'PANIC_MUTE') {
         soundEngine.stopImmediate();
       } else if (action === 'CLEAR_TTS_QUEUE') {
+        sessionProvinceCommentCountsRef.current.clear();
+        recentGiftFingerprintMapRef.current.clear();
         soundEngine.clearEventQueue();
       } else if (action === 'CLEAR_COMMENT_TTS_QUEUE') {
+        sessionProvinceCommentCountsRef.current.clear();
+        recentGiftFingerprintMapRef.current.clear();
         soundEngine.clearCommentOnlyEventQueue();
       } else if (action === 'SYNC_BGM_STATE') {
         soundEngine.applyRemoteBgmSnapshot(payload);
@@ -1386,11 +1483,33 @@ export function useClassroomEngine() {
     safetyCategories,
   ]);
 
-  // Giả lập NPC tự động hỗ trợ điểm tỉnh:
-  // - Chỉ chạy duy nhất trên Studio Master (!isObsView) để không bị sinh đúp 2 NPC từ 2 tab
-  // - Mỗi chu kỳ chỉ kích hoạt đúng 1 NPC duy nhất
+  // Khi tab Dev Studio trên Chrome đang mở (!isObsView), phát nhịp heartbeat để OBS biết có Chrome đang điều khiển;
+  // khi đóng tab Chrome, báo ngay MASTER_CLOSED để OBS lập tức tự chạy độc lập!
   useEffect(() => {
-    if (!config.npcAutoEnabled || isObsView) return;
+    if (isObsView) return;
+    syncService.sendCommand('MASTER_HEARTBEAT', {});
+    const hbTimer = window.setInterval(() => {
+      syncService.sendCommand('MASTER_HEARTBEAT', {});
+    }, 2500);
+    const handleUnload = () => {
+      syncService.sendCommand('MASTER_CLOSED', {});
+    };
+    window.addEventListener('beforeunload', handleUnload);
+    window.addEventListener('pagehide', handleUnload);
+    return () => {
+      window.clearInterval(hbTimer);
+      window.removeEventListener('beforeunload', handleUnload);
+      window.removeEventListener('pagehide', handleUnload);
+      syncService.sendCommand('MASTER_CLOSED', {});
+    };
+  }, [isObsView]);
+
+  // Giả lập NPC tự động hỗ trợ điểm tỉnh:
+  // - Nếu đang mở bảng Dev trên Chrome (!isObsView): Chrome chủ động sinh NPC và đồng bộ sang OBS.
+  // - Nếu KHÔNG mở bảng Dev trên Chrome (chỉ mở OBS ?view=live / ?obs=1 độc lập): OBS tự động đảm nhận sinh NPC để game hoạt động bình thường 100%!
+  // - Mỗi chu kỳ chỉ kích hoạt đúng 1 NPC duy nhất.
+  useEffect(() => {
+    if (!config.npcAutoEnabled) return;
     let cancelled = false;
     let timeoutId: number | null = null;
 
@@ -1407,7 +1526,16 @@ export function useClassroomEngine() {
 
       timeoutId = window.setTimeout(() => {
         if (cancelled) return;
-        if (!isSessionEndingRef.current && configRef.current.npcAutoEnabled) {
+        const hasActiveChromeMaster =
+          isObsView &&
+          ((peerCountsRef.current.adminPeers ?? 0) > 0 ||
+            Date.now() - lastMasterSeenAtRef.current < 5500);
+
+        if (
+          !hasActiveChromeMaster &&
+          !isSessionEndingRef.current &&
+          configRef.current.npcAutoEnabled
+        ) {
           const list = provincesRef.current;
           if (list.length > 0) {
             const randomProv = list[Math.floor(Math.random() * list.length)];
@@ -1434,7 +1562,7 @@ export function useClassroomEngine() {
                 isRose,
                 isNpc: true,
               },
-              true
+              !isObsView
             );
           }
         }
@@ -1460,31 +1588,58 @@ export function useClassroomEngine() {
     });
   }, []);
 
-  const handleResetAllProvinces = useCallback((resetTop1Wins = false) => {
-    sessionProvinceCommentCountsRef.current.clear();
-    recentGiftFingerprintMapRef.current.clear();
-    const fresh = createInitialProvinces().map((baseProv) => {
-      const cur = provincesRef.current.find((p) => p.id === baseProv.id);
-      return {
-        ...baseProv,
-        top1WinCount: resetTop1Wins ? 0 : cur?.top1WinCount || 0,
-      };
-    });
-    provincesRef.current = fresh;
-    setProvinces(fresh);
-    setActivityLogs([]);
-    cameraQueueRef.current = [];
-    setCameraQueue([]);
-    cameraFocusRef.current = { provinceId: null, until: 0 };
-    setCameraFocus({ provinceId: null, until: 0 });
-    setSessionEndSummary(null);
-    isSessionEndingRef.current = false;
-    soundEngine.announceRoundStart(
-      configRef.current.roundNumber || 69,
-      configRef.current
-    );
-    syncService.sendCommand('RESET_ALL_PROVINCES', { resetTop1Wins });
-  }, []);
+  const handleResetAllProvinces = useCallback(
+    (resetTop1Wins = false, resetRoundToOne = false) => {
+      sessionProvinceCommentCountsRef.current.clear();
+      recentGiftFingerprintMapRef.current.clear();
+      if (sessionEndTimeoutRef.current) {
+        window.clearTimeout(sessionEndTimeoutRef.current);
+        sessionEndTimeoutRef.current = null;
+      }
+      const nextRound = resetRoundToOne ? 1 : configRef.current.roundNumber || 1;
+      if (resetRoundToOne) {
+        setConfig((prev) => ({
+          ...prev,
+          roundNumber: 1,
+        }));
+        syncService.sendCommand('UPDATE_CONFIG', {
+          patch: { roundNumber: 1 },
+        });
+      }
+      const fresh = createInitialProvinces().map((baseProv) => {
+        const cur = provincesRef.current.find((p) => p.id === baseProv.id);
+        return {
+          ...baseProv,
+          top1WinCount: resetTop1Wins ? 0 : cur?.top1WinCount || 0,
+        };
+      });
+      provincesRef.current = fresh;
+      setProvinces(fresh);
+      setActivityLogs([]);
+      cameraQueueRef.current = [];
+      setCameraQueue([]);
+      cameraFocusRef.current = { provinceId: null, until: 0 };
+      setCameraFocus({ provinceId: null, until: 0 });
+      setSessionEndSummary(null);
+      isSessionEndingRef.current = false;
+      soundEngine.announceRoundStart(nextRound, {
+        ...configRef.current,
+        roundNumber: nextRound,
+      });
+      syncService.sendCommand('RESET_ALL_PROVINCES', {
+        resetTop1Wins,
+        resetRoundToOne,
+      });
+    },
+    []
+  );
+
+  /**
+   * Reset cả Vòng Đấu về Vòng 1 & Reset Bảng Top 3 (top1WinCount) + Điểm các tỉnh về 0
+   */
+  const handleResetRoundAndTop3 = useCallback(() => {
+    handleResetAllProvinces(true, true);
+  }, [handleResetAllProvinces]);
 
   const handleRenameProvince = useCallback(
     (provinceId: string, newName: string) => {
@@ -1541,7 +1696,7 @@ export function useClassroomEngine() {
         ? Math.max(2, giftCoinsOverride || cleanCount)
         : cleanCount;
 
-      executeProvinceGift(
+      const res = executeProvinceGift(
         {
           provinceId: target.id,
           username,
@@ -1558,6 +1713,7 @@ export function useClassroomEngine() {
         },
         true
       );
+      return res;
     },
     [executeProvinceGift, npcAvatars, npcNames]
   );
@@ -1672,14 +1828,19 @@ export function useClassroomEngine() {
   }, []);
 
   const handleClearEventTtsQueue = useCallback(() => {
+    sessionProvinceCommentCountsRef.current.clear();
+    recentGiftFingerprintMapRef.current.clear();
     soundEngine.clearEventQueue();
     syncService.sendCommand('CLEAR_TTS_QUEUE', {});
   }, []);
 
   /**
    * Xóa hàng chờ +1 (xóa những hàng chờ comment, giữ nguyên hàng chờ tặng quà)
+   * Đồng thời mở khóa lại bộ đếm comment trong ván để người chơi comment lại được ngay!
    */
   const handleClearCommentOnlyQueue = useCallback((): { removedCount: number } => {
+    sessionProvinceCommentCountsRef.current.clear();
+    recentGiftFingerprintMapRef.current.clear();
     const removedTts = soundEngine.clearCommentOnlyEventQueue();
     const prevCamLen = cameraQueueRef.current.length;
     const giftOnlyCam = cameraQueueRef.current.filter((item) =>
@@ -2049,6 +2210,7 @@ export function useClassroomEngine() {
     handleTriggerRandomGift,
     handleTriggerBatchSameProvince,
     handleResetAllProvinces,
+    handleResetRoundAndTop3,
     handleRenameProvince,
     handleSetProvincePoints,
     handleFocusProvinceManual,
