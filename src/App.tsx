@@ -261,6 +261,8 @@ export default function App() {
           compactRemoteStage={compactRemoteStage}
           onToggleCompactRemoteStage={handleToggleCompactRemoteStage}
           onTriggerTurboBatchRead={engine.handleTriggerTurboBatchRead}
+          onToggleTurboReadMode={engine.handleToggleTurboReadMode}
+          onClearCommentOnlyQueue={engine.handleClearCommentOnlyQueue}
           onTriggerSessionEndNow={() =>
             engine.handleSessionTimeUp(engine.config.roundNumber || 69)
           }

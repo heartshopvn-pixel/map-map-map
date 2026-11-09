@@ -111,6 +111,8 @@ interface DevStudioProps {
   compactRemoteStage: boolean;
   onToggleCompactRemoteStage: () => void;
   onTriggerTurboBatchRead: () => { ok: boolean; count: number };
+  onToggleTurboReadMode?: () => { enabled: boolean };
+  onClearCommentOnlyQueue?: () => { removedCount: number };
   onTriggerSessionEndNow?: () => void;
 }
 
@@ -184,6 +186,8 @@ export const DevStudio: React.FC<DevStudioProps> = ({
   compactRemoteStage,
   onToggleCompactRemoteStage,
   onTriggerTurboBatchRead,
+  onToggleTurboReadMode,
+  onClearCommentOnlyQueue,
   onTriggerSessionEndNow,
 }) => {
   const [copiedLiveUrl, setCopiedLiveUrl] = useState(false);
@@ -357,7 +361,9 @@ export const DevStudio: React.FC<DevStudioProps> = ({
             onResetAllProvinces={onResetAllProvinces}
             onFocusProvince={onFocusProvince}
             onTriggerTurboBatchRead={onTriggerTurboBatchRead}
+            onToggleTurboReadMode={onToggleTurboReadMode}
             onClearEventTtsQueue={onClearEventTtsQueue}
+            onClearCommentOnlyQueue={onClearCommentOnlyQueue}
             onClearCameraQueue={onClearCameraQueue}
             onTriggerSessionEndNow={onTriggerSessionEndNow}
           />

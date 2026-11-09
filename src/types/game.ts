@@ -206,6 +206,10 @@ export interface GameConfig {
   nodeVoice: string;
   nodeTtsEndpoint: string;
   ttsRate: number;
+  /** Bật/Tắt chế độ đọc siêu tốc (đẩy max tốc độ đọc 2.0x và khóa thanh chỉnh tốc độ bên Dev Âm Thanh) */
+  turboReadMode?: boolean;
+  /** Tốc độ đọc thông thường được lưu lại trước khi bật chế độ đọc siêu tốc */
+  savedNormalTtsRate?: number;
   ttsPitch: number;
   ttsVolume: number;
   maxTtsWords: number;
@@ -322,6 +326,7 @@ export interface SyncPacket {
     | 'PANIC_MUTE'
     | 'TEST_TTS'
     | 'CLEAR_TTS_QUEUE'
+    | 'CLEAR_COMMENT_TTS_QUEUE'
     | 'SYNC_LIVE_TTS_SNAPSHOT'
     | 'REQUEST_FULL_SYNC'
     | 'RESTORE_BACKUP'

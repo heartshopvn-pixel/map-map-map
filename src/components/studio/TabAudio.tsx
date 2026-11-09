@@ -1039,11 +1039,21 @@ export const TabAudio: React.FC<TabAudioProps> = ({
 
         {/* Tốc độ, Cao độ, Âm lượng */}
         <div className="grid grid-cols-3 gap-2 pt-1">
-          <div className="p-2 rounded-lg bg-stone-950 border border-stone-800">
+          <div
+            className={`p-2 rounded-lg border ${
+              config.turboReadMode
+                ? 'bg-amber-950/30 border-amber-500/60'
+                : 'bg-stone-950 border-stone-800'
+            }`}
+          >
             <div className="flex justify-between text-[10px] text-stone-400">
-              <span>Tốc độ</span>
-              <span className="font-mono text-stone-200">
-                {config.ttsRate.toFixed(2)}x
+              <span>{config.turboReadMode ? 'Tốc độ 🔒' : 'Tốc độ'}</span>
+              <span
+                className={`font-mono font-bold ${
+                  config.turboReadMode ? 'text-amber-300' : 'text-stone-200'
+                }`}
+              >
+                {(config.turboReadMode ? 2.0 : config.ttsRate).toFixed(2)}x
               </span>
             </div>
             <input
@@ -1051,12 +1061,20 @@ export const TabAudio: React.FC<TabAudioProps> = ({
               min={0.7}
               max={2.0}
               step={0.05}
-              value={config.ttsRate}
-              onChange={(e) =>
-                onUpdateConfig({ ttsRate: parseFloat(e.target.value) })
-              }
-              className="w-full accent-amber-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+              disabled={Boolean(config.turboReadMode)}
+              value={config.turboReadMode ? 2.0 : config.ttsRate}
+              onChange={(e) => {
+                if (config.turboReadMode) return;
+                const val = parseFloat(e.target.value);
+                onUpdateConfig({ ttsRate: val, savedNormalTtsRate: val });
+              }}
+              className="w-full accent-amber-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
             />
+            {config.turboReadMode && (
+              <div className="text-[9px] text-amber-300/90 font-semibold mt-0.5 leading-tight">
+                Khóa ở 2.0x (Siêu tốc)
+              </div>
+            )}
           </div>
 
           <div className="p-2 rounded-lg bg-stone-950 border border-stone-800">

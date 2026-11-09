@@ -732,6 +732,8 @@ export const DEFAULT_CONFIG: GameConfig = {
   nodeVoice: 'google-vi-gtx',
   nodeTtsEndpoint: 'http://localhost:8080/tts',
   ttsRate: 1.08,
+  turboReadMode: false,
+  savedNormalTtsRate: 1.08,
   ttsPitch: 1.0,
   ttsVolume: 1.0,
   maxTtsWords: 45,

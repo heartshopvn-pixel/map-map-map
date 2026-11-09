@@ -1161,6 +1161,51 @@ class SoundService {
     }
   }
 
+  /**
+   * Xóa hàng chờ +1 (chỉ xóa những hàng chờ comment & câu phụ, giữ nguyên hàng chờ tặng quà / tổng kết phiên)
+   */
+  public clearCommentOnlyEventQueue(): number {
+    const isKeepItem = (q: TTSQueueItem) =>
+      Boolean(
+        q.meta?.isRose ||
+          q.meta?.isSpecialGift ||
+          q.isSessionSummary ||
+          q.id?.startsWith('round_start_')
+      );
+
+    const removedItems = this.ttsQueue.filter((q) => !isKeepItem(q));
+    this.ttsQueue = this.ttsQueue.filter((q) => isKeepItem(q));
+
+    let removedCount = removedItems.length;
+    const callbacks = removedItems
+      .map((q) => q.onDone)
+      .filter(Boolean) as Array<() => void>;
+
+    // Nếu câu đang phát hiện tại cũng là hàng chờ comment (+1đ), ngắt luôn để chuyển ngay sang hàng chờ quà tặng kế tiếp
+    if (this.isSpeaking && this.activeEventItem && !isKeepItem(this.activeEventItem)) {
+      removedCount += 1;
+      if (this.activeEventItem.onDone) {
+        callbacks.unshift(this.activeEventItem.onDone);
+      }
+      this.stopCurrentUtteranceOnly();
+    }
+
+    this.emitEventQueue();
+    for (const cb of callbacks) {
+      try {
+        cb();
+      } catch {
+        // Ignore
+      }
+    }
+
+    if (!this.isSpeaking && this.ttsQueue.length > 0 && this.latestConfig) {
+      this.processQueue(this.latestConfig);
+    }
+
+    return removedCount;
+  }
+
   public stopImmediate() {
     const callbacks = [
       this.activeEventItem?.onDone,
@@ -2083,6 +2128,9 @@ class SoundService {
     voice: string,
     config: GameConfig
   ): { effectiveRate: number; preservePitch: boolean } {
+    if (config.turboReadMode) {
+      return { effectiveRate: 2.0, preservePitch: true };
+    }
     const baseRate = Math.max(0.5, Math.min(2.0, config.ttsRate || 1));
     const pitch = config.ttsPitch ?? 1;
 
@@ -2230,7 +2278,9 @@ class SoundService {
     const nextText = nextItem.text;
     const itemStartCallback = nextItem.onStart;
     const itemCallback = nextItem.onDone;
-    const isTurboItem = Boolean(nextItem.isTurboBatch);
+    const isTurboItem = Boolean(
+      config.turboReadMode || this.latestConfig?.turboReadMode || nextItem.isTurboBatch
+    );
     const token = ++this.speechTokenSeq;
     let finishedOnce = false;
 
@@ -2255,7 +2305,7 @@ class SoundService {
     this.activeEventItem = nextItem;
     this.currentEventText = nextText;
     this.emitStatus(
-      isTurboItem ? '⚡ Đang đọc Siêu Tốc...' : 'Đang đọc Giọng AI #3...',
+      isTurboItem ? '⚡ Đang đọc Siêu Tốc (2.0x)...' : 'Đang đọc Giọng AI #3...',
       true,
       nextText
     );
@@ -2305,25 +2355,26 @@ class SoundService {
             this.processQueue(this.latestConfig);
           }
         },
-        isTurboItem ? 25 : 65
+        this.latestConfig?.turboReadMode || isTurboItem ? 20 : 65
       );
     };
 
     const effectiveConfig: GameConfig = isTurboItem
       ? {
           ...config,
-          ttsRate: Math.min(1.65, Math.max(1.26, (config.ttsRate || 1.15) * 1.15)),
+          ttsRate: 2.0,
+          turboReadMode: true,
         }
       : config;
 
     if (this.isTabMuted()) {
       const wordCount = nextText.split(/\s+/).filter(Boolean).length;
       const simDurationMs = Math.max(
-        isTurboItem ? 750 : 1200,
+        isTurboItem ? 600 : 1200,
         Math.min(
           5500,
           Math.round(
-            (wordCount * (isTurboItem ? 210 : 280)) /
+            (wordCount * (isTurboItem ? 190 : 280)) /
               Math.max(0.5, effectiveConfig.ttsRate || 1)
           )
         )

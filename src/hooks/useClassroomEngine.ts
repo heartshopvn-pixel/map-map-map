@@ -926,6 +926,7 @@ export function useClassroomEngine() {
               senders: nextSenders,
               totalRoses: nextRoses,
               totalGifts: nextGifts,
+              isTurboPan: Boolean(configRef.current.turboReadMode),
               until: startNow + holdMs,
             };
             cameraFocusRef.current = extendedFocus;
@@ -958,6 +959,7 @@ export function useClassroomEngine() {
               totalRoses: roseCount,
               totalGifts: payload.isRose ? Math.max(1, roseCount) : 1,
               startedAt: startNow,
+              isTurboPan: Boolean(configRef.current.turboReadMode),
               until: startNow + holdMs,
             };
             cameraFocusRef.current = nextFocus;
@@ -1307,6 +1309,8 @@ export function useClassroomEngine() {
         soundEngine.stopImmediate();
       } else if (action === 'CLEAR_TTS_QUEUE') {
         soundEngine.clearEventQueue();
+      } else if (action === 'CLEAR_COMMENT_TTS_QUEUE') {
+        soundEngine.clearCommentOnlyEventQueue();
       } else if (action === 'SYNC_BGM_STATE') {
         soundEngine.applyRemoteBgmSnapshot(payload);
       } else if (action === 'REQUEST_FULL_SYNC' && !isObsView) {
@@ -1621,6 +1625,55 @@ export function useClassroomEngine() {
     soundEngine.clearEventQueue();
     syncService.sendCommand('CLEAR_TTS_QUEUE', {});
   }, []);
+
+  /**
+   * Xóa hàng chờ +1 (xóa những hàng chờ comment, giữ nguyên hàng chờ tặng quà)
+   */
+  const handleClearCommentOnlyQueue = useCallback((): { removedCount: number } => {
+    const removedTts = soundEngine.clearCommentOnlyEventQueue();
+    const prevCamLen = cameraQueueRef.current.length;
+    const giftOnlyCam = cameraQueueRef.current.filter((item) =>
+      Boolean(item.isRose)
+    );
+    const removedCam = Math.max(0, prevCamLen - giftOnlyCam.length);
+    cameraQueueRef.current = giftOnlyCam;
+    setCameraQueue(giftOnlyCam);
+    syncService.sendCommand('CLEAR_COMMENT_TTS_QUEUE', {});
+    return { removedCount: removedTts + removedCam };
+  }, []);
+
+  /**
+   * Bật / Tắt chế độ Đọc Siêu Tốc:
+   * - Khi BẬT: đẩy max tốc độ đọc lên 2.0x và khóa thanh chỉnh tốc độ bên Dev Âm Thanh.
+   * - Khi TẮT: khôi phục tốc độ đọc trước đó và mở khóa thanh chỉnh tốc độ.
+   */
+  const handleToggleTurboReadMode = useCallback((): { enabled: boolean } => {
+    const cur = configRef.current;
+    const nextTurbo = !cur.turboReadMode;
+    if (nextTurbo) {
+      const savedRate =
+        cur.ttsRate < 2.0
+          ? cur.ttsRate
+          : cur.savedNormalTtsRate && cur.savedNormalTtsRate < 2.0
+          ? cur.savedNormalTtsRate
+          : 1.08;
+      handleUpdateConfig({
+        turboReadMode: true,
+        savedNormalTtsRate: savedRate,
+        ttsRate: 2.0,
+      });
+    } else {
+      const restoredRate =
+        cur.savedNormalTtsRate && cur.savedNormalTtsRate < 2.0
+          ? cur.savedNormalTtsRate
+          : 1.08;
+      handleUpdateConfig({
+        turboReadMode: false,
+        ttsRate: restoredRate,
+      });
+    }
+    return { enabled: nextTurbo };
+  }, [handleUpdateConfig]);
 
   /**
    * ĐỌC SIÊU TỐC (Turbo Batch Read):
@@ -1957,6 +2010,8 @@ export function useClassroomEngine() {
     handlePanicMute,
     handleTestTTS,
     handleClearEventTtsQueue,
+    handleClearCommentOnlyQueue,
+    handleToggleTurboReadMode,
     handleTriggerTurboBatchRead,
     handlePushFullSyncToLive,
     handleSaveBackupJson,

@@ -63,7 +63,9 @@ interface TabControlProps {
   onResetAllProvinces: () => void;
   onFocusProvince: (provinceId: string) => void;
   onTriggerTurboBatchRead: () => { ok: boolean; count: number };
+  onToggleTurboReadMode?: () => { enabled: boolean };
   onClearEventTtsQueue: () => void;
+  onClearCommentOnlyQueue?: () => { removedCount: number };
   onClearCameraQueue: () => void;
   onTriggerSessionEndNow?: () => void;
 }
@@ -81,8 +83,9 @@ export const TabControl: React.FC<TabControlProps> = ({
   onTriggerBatchSameProvince,
   onResetAllProvinces,
   onFocusProvince,
-  onTriggerTurboBatchRead,
+  onToggleTurboReadMode,
   onClearEventTtsQueue,
+  onClearCommentOnlyQueue,
   onClearCameraQueue,
   onTriggerSessionEndNow,
 }) => {
@@ -181,32 +184,76 @@ export const TabControl: React.FC<TabControlProps> = ({
     return items;
   }, [cameraQueue, eventTtsQueue.detailedQueue]);
 
-  const selectablePendingCount = useMemo(() => {
-    const nonTurboTtsProvinceCount = eventTtsQueue.detailedQueue.filter(
-      (q) => !q.isTurboBatch && Boolean(q.meta?.provinceId)
+  // Đếm số lượng hàng chờ +1 (comment) đang đợi trong hàng chờ
+  const commentQueueCount = useMemo(() => {
+    const ttsComments = eventTtsQueue.detailedQueue.filter(
+      (q) =>
+        !q.meta?.isRose &&
+        !q.meta?.isSpecialGift &&
+        !q.isSessionSummary &&
+        !q.id?.startsWith('round_start_')
     ).length;
-    return nonTurboTtsProvinceCount + cameraQueue.length;
-  }, [cameraQueue.length, eventTtsQueue.detailedQueue]);
+    const camComments = cameraQueue.filter((c) => !c.isRose).length;
+    return ttsComments + camComments;
+  }, [cameraQueue, eventTtsQueue.detailedQueue]);
 
-  const handleClickTurboRead = () => {
-    const res = onTriggerTurboBatchRead();
-    if (res.ok) {
-      setTurboToast(
-        `⚡ Đã gom ${res.count} hàng chờ hiện tại để Đọc Siêu Tốc & Pan Camera nhanh! (Hàng chờ mới vẫn thêm bình thường)`
-      );
+  const isTurboModeOn = Boolean(config.turboReadMode);
+
+  const handleClickToggleTurboMode = () => {
+    if (onToggleTurboReadMode) {
+      const res = onToggleTurboReadMode();
+      if (res.enabled) {
+        setTurboToast(
+          '⚡ Đã BẬT chế độ Đọc Siêu Tốc: Đẩy max tốc độ đọc 2.0x & khóa chỉnh tốc độ bên Dev Âm Thanh!'
+        );
+      } else {
+        setTurboToast(
+          '✅ Đã TẮT chế độ Đọc Siêu Tốc: Khôi phục tốc độ đọc bình thường & mở khóa chỉnh tốc độ.'
+        );
+      }
     } else {
+      const next = !isTurboModeOn;
+      if (next) {
+        const saved =
+          config.ttsRate < 2.0
+            ? config.ttsRate
+            : config.savedNormalTtsRate || 1.08;
+        onUpdateConfig({
+          turboReadMode: true,
+          savedNormalTtsRate: saved,
+          ttsRate: 2.0,
+        });
+        setTurboToast(
+          '⚡ Đã BẬT chế độ Đọc Siêu Tốc: Đẩy max tốc độ đọc 2.0x & khóa chỉnh tốc độ bên Dev Âm Thanh!'
+        );
+      } else {
+        onUpdateConfig({
+          turboReadMode: false,
+          ttsRate: config.savedNormalTtsRate || 1.08,
+        });
+        setTurboToast(
+          '✅ Đã TẮT chế độ Đọc Siêu Tốc: Khôi phục tốc độ đọc bình thường & mở khóa chỉnh tốc độ.'
+        );
+      }
+    }
+    setTimeout(() => setTurboToast(null), 3500);
+  };
+
+  const handleClickClearCommentQueue = () => {
+    if (onClearCommentOnlyQueue) {
+      const res = onClearCommentOnlyQueue();
       setTurboToast(
-        'ℹ️ Hiện chưa có hàng chờ tỉnh nào đang đợi. Bạn có thể bấm "+ Tạo 5 hàng chờ mẫu" để thử ngay!'
+        `🗑️ Đã xóa ${res.removedCount} hàng chờ +1 (comment) — giữ nguyên toàn bộ hàng chờ tặng quà!`
       );
     }
-    setTimeout(() => setTurboToast(null), 4000);
+    setTimeout(() => setTurboToast(null), 3500);
   };
 
   const handleSpawn5QueueSamples = () => {
     for (let i = 0; i < 5; i++) {
       onTriggerRandomGift(i % 2 === 1, undefined, undefined, true, 1);
     }
-    setTurboToast('✅ Đã đẩy nhanh 5 lượt vào hàng chờ! Bấm "⚡ Đọc Siêu Tốc" để rút gọn ngay.');
+    setTurboToast('✅ Đã đẩy nhanh 5 lượt vào hàng chờ để thử nghiệm!');
     setTimeout(() => setTurboToast(null), 3500);
   };
 
@@ -251,7 +298,7 @@ export const TabControl: React.FC<TabControlProps> = ({
 
   return (
     <div className="space-y-3.5">
-      {/* 0. THẺ GIỌNG ĐỌC AI & HÀNG CHỜ SỰ KIỆN ÂM THANH (ĐẶT LÊN ĐẦU DEV ĐIỀU KHIỂN) + NÚT ĐỌC SIÊU TỐC */}
+      {/* 0. THẺ GIỌNG ĐỌC AI & HÀNG CHỜ SỰ KIỆN ÂM THANH (ĐẶT LÊN ĐẦU DEV ĐIỀU KHIỂN) + NÚT BẬT/TẮT ĐỌC SIÊU TỐC 2.0X */}
       <section className="p-3 rounded-xl bg-stone-900/95 border-2 border-amber-500/60 shadow-lg space-y-2.5">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-xs font-extrabold text-amber-300 flex items-center gap-1.5 uppercase tracking-wide">
@@ -272,10 +319,11 @@ export const TabControl: React.FC<TabControlProps> = ({
         {/* Câu đang phát hiện tại */}
         <div className="p-2 rounded-lg bg-stone-950 border border-stone-800 space-y-1">
           <div className="flex items-center justify-between text-[10px] text-stone-400">
-            <span>Đang phát trên Live:</span>
+            <span>
+              Đang phát trên Live ({isTurboModeOn ? '⚡ 2.00x Siêu tốc' : `${config.ttsRate.toFixed(2)}x`}):
+            </span>
             <span className="font-mono font-bold text-amber-300">
-              Đang chờ: {combinedQueueDisplay.length} mục (Có thể rút gọn:{' '}
-              {selectablePendingCount})
+              Đang chờ: {combinedQueueDisplay.length} mục (+1 comment: {commentQueueCount})
             </span>
           </div>
           <div className="text-xs font-semibold text-stone-100 line-clamp-2 min-h-[32px] bg-stone-900/80 px-2.5 py-1.5 rounded border border-stone-800/80">
@@ -284,18 +332,35 @@ export const TabControl: React.FC<TabControlProps> = ({
           </div>
         </div>
 
-        {/* Nút Bấm ĐỌC SIÊU TỐC (Chọn tất cả hàng chờ hiện tại để đọc hàng loạt + pan camera siêu nhanh) */}
+        {/* Nút BẬT / TẮT CHẾ ĐỘ ĐỌC SIÊU TỐC (Max 2.0x + khóa chỉnh tốc độ bên Dev Âm Thanh) */}
         <div className="space-y-1.5">
           <button
             type="button"
-            onClick={handleClickTurboRead}
-            className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:via-orange-400 hover:to-rose-400 text-stone-950 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer transition shadow-md"
+            onClick={handleClickToggleTurboMode}
+            className={`w-full py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer transition shadow-md border ${
+              isTurboModeOn
+                ? 'bg-gradient-to-r from-emerald-500 via-amber-400 to-orange-500 text-stone-950 border-emerald-300 ring-2 ring-amber-400/60'
+                : 'bg-stone-800 hover:bg-stone-700 text-amber-300 border-amber-500/50'
+            }`}
           >
-            <Zap className="w-4 h-4 fill-stone-950" />
+            <Zap
+              className={`w-4 h-4 ${
+                isTurboModeOn ? 'fill-stone-950 text-stone-950 animate-bounce' : 'text-amber-400'
+              }`}
+            />
             <span>
-              ⚡ ĐỌC SIÊU TỐC ({selectablePendingCount} HÀNG CHỜ HIỆN TẠI)
+              {isTurboModeOn
+                ? '⚡ ĐANG BẬT CHẾ ĐỘ ĐỌC SIÊU TỐC (MAX 2.0X • BẤM ĐỂ TẮT)'
+                : '⚡ BẬT CHẾ ĐỘ ĐỌC SIÊU TỐC (ĐẨY MAX TỐC ĐỘ 2.0X)'}
             </span>
           </button>
+
+          {isTurboModeOn && (
+            <div className="px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/40 text-[10px] font-semibold text-amber-200 flex items-center justify-between">
+              <span>🔒 Đã khóa thanh Tốc Độ bên Dev Âm Thanh ở mức 2.00x</span>
+              <span className="font-mono font-bold text-emerald-300">2.00x MAX</span>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-1.5">
             <button
@@ -319,6 +384,18 @@ export const TabControl: React.FC<TabControlProps> = ({
               <span>Xóa sạch hàng chờ</span>
             </button>
           </div>
+
+          {/* Nút Xóa hàng chờ +1 (xóa những hàng chờ comment) nằm ngay dưới nút xóa sạch hàng chờ */}
+          <button
+            type="button"
+            onClick={handleClickClearCommentQueue}
+            className="w-full py-1.5 px-2.5 rounded-lg bg-orange-950/70 hover:bg-orange-900/80 border border-orange-500/45 text-[10.5px] font-bold text-orange-200 flex items-center justify-center gap-1.5 cursor-pointer transition"
+          >
+            <Trash2 className="w-3 h-3 text-orange-400" />
+            <span>
+              Xóa hàng chờ +1 (Xóa hàng chờ comment: {commentQueueCount})
+            </span>
+          </button>
         </div>
 
         {turboToast && (
