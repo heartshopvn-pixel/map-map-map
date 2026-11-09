@@ -1,0 +1,133 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    user-select: none;
+    font-family: 'Be Vietnam Pro', system-ui, -apple-system, sans-serif;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Custom subtle scrollbars for Dev Studio */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #141210;
+}
+::-webkit-scrollbar-thumb {
+  background: #44403c;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #d97706;
+}
+
+/* Hiệu ứng ném Avatar lớn bên ngoài */
+.province-avatar-throw {
+  animation-name: throwAvatarIntoProvince;
+  animation-duration: 420ms;
+  animation-timing-function: cubic-bezier(0.22, 1.28, 0.36, 1);
+  animation-fill-mode: both;
+}
+
+@keyframes throwAvatarIntoProvince {
+  0% {
+    transform: translate3d(0px, -65px, 0px) scale(1.55) rotate(-8deg);
+    opacity: 0;
+  }
+  25% {
+    opacity: 1;
+  }
+  72% {
+    transform: translate3d(0px, 5px, 0px) scale(0.94) rotate(2deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(0px, 0px, 0px) scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+/* Hiệu ứng Avatar người chơi rơi nhanh từ trên xuống vị trí biên giới tỉnh khi Zoom */
+.province-pin-drop {
+  animation-name: pinDropOntoProvince;
+  animation-duration: 360ms;
+  animation-timing-function: cubic-bezier(0.2, 1.35, 0.38, 1);
+  animation-fill-mode: both;
+}
+
+@keyframes pinDropOntoProvince {
+  0% {
+    transform: translate(-50%, -180%) scale(1.65);
+    opacity: 0;
+  }
+  35% {
+    opacity: 1;
+  }
+  75% {
+    transform: translate(-50%, -42%) scale(0.92);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+  }
+}
+
+/* Hiệu ứng Floating Text điểm cộng bay lên ở trung tâm tỉnh (Layer cao nhất) */
+.province-float-points {
+  animation: floatProvincePointsUp 1.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes floatProvincePointsUp {
+  0% {
+    transform: translate3d(0, 6px, 0) scale(0.6);
+    opacity: 0;
+  }
+  18% {
+    transform: translate3d(0, -3px, 0) scale(1.18);
+    opacity: 1;
+  }
+  40% {
+    transform: translate3d(0, -7px, 0) scale(1);
+    opacity: 1;
+  }
+  82% {
+    transform: translate3d(0, -14px, 0) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(0, -20px, 0) scale(0.92);
+    opacity: 0.15;
+  }
+}
+
+/* Hiệu ứng Icon Hoa Hồng nổ nhanh (Rose Burst) tại tâm tỉnh khi nhận Hoa */
+.province-rose-burst-item {
+  animation: roseBurstOut 720ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes roseBurstOut {
+  0% {
+    transform: translate(-50%, -50%) scale(0.2) rotate(0deg);
+    opacity: 0;
+  }
+  25% {
+    opacity: 1;
+  }
+  70% {
+    transform: translate(calc(-50% + var(--bx, 0px)), calc(-50% + var(--by, 0px))) scale(1.15) rotate(var(--brot, 15deg));
+    opacity: 1;
+  }
+  100% {
+    transform: translate(calc(-50% + var(--bx, 0px) * 1.25), calc(-50% + var(--by, 0px) * 1.25)) scale(0.5) rotate(var(--brot, 25deg));
+    opacity: 0;
+  }
+}

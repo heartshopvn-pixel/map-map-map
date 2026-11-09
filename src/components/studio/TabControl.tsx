@@ -1,0 +1,499 @@
+import React, { useMemo, useState } from 'react';
+import {
+  BarChart3,
+  Clock,
+  Flower2,
+  Gift,
+  MessageSquare,
+  RotateCcw,
+  Send,
+  Shuffle,
+  Trophy,
+  Users,
+} from 'lucide-react';
+import { ActivityLogItem } from '../../hooks/useClassroomEngine';
+import { GameConfig, GamePlayMode, ProvinceCell } from '../../types/game';
+
+interface TabControlProps {
+  config: GameConfig;
+  provinces: ProvinceCell[];
+  activityLogs: ActivityLogItem[];
+  onUpdateConfig: (partial: Partial<GameConfig>) => void;
+  onSimulateComment: (
+    username: string,
+    comment: string,
+    avatarUrl?: string | null,
+    forceProvinceId?: string,
+    forceIsRose?: boolean
+  ) => boolean;
+  onTriggerRandomGift: (
+    isRose: boolean,
+    specificProvinceId?: string,
+    customUsername?: string
+  ) => void;
+  onTriggerBatchSameProvince: (
+    provinceId?: string,
+    senderCount?: number,
+    isRose?: boolean
+  ) => void;
+  onResetAllProvinces: () => void;
+  onFocusProvince: (provinceId: string) => void;
+  onTriggerSessionEndNow?: () => void;
+}
+
+export const TabControl: React.FC<TabControlProps> = ({
+  config,
+  provinces,
+  activityLogs,
+  onUpdateConfig,
+  onSimulateComment,
+  onTriggerRandomGift,
+  onTriggerBatchSameProvince,
+  onResetAllProvinces,
+  onFocusProvince,
+  onTriggerSessionEndNow,
+}) => {
+  const [testUsername, setTestUsername] = useState('Minh Khang');
+  const [selectedProvinceId, setSelectedProvinceId] = useState<string>(
+    provinces.find((p) => p.id === 'lang-son')?.id ||
+      provinces[0]?.id ||
+      'tp-ha-noi'
+  );
+  const [customComment, setCustomComment] = useState('');
+  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+
+  const rankedProvinces = useMemo(
+    () =>
+      [...provinces]
+        .filter((p) => p.points > 0)
+        .sort((a, b) => b.points - a.points),
+    [provinces]
+  );
+
+  const handleSendBySelect = (isRose: boolean) => {
+    const prov = provinces.find((p) => p.id === selectedProvinceId);
+    if (!prov) return;
+    onTriggerRandomGift(
+      isRose,
+      prov.id,
+      testUsername.trim() || 'Người Chơi'
+    );
+  };
+
+  const handleSendFreeComment = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customComment.trim()) return;
+    const matched = onSimulateComment(
+      testUsername.trim() || 'Người Chơi',
+      customComment.trim()
+    );
+    if (matched) {
+      setFeedbackMsg(`Đã nhận diện tỉnh từ bình luận: "${customComment}"`);
+      setCustomComment('');
+    } else {
+      setFeedbackMsg(
+        'Không tìm thấy tên tỉnh trong câu bình luận. Hãy gõ tên tỉnh (VD: Đà Nẵng, Lạng Sơn, Nghệ An, Hà Nội...)'
+      );
+    }
+    setTimeout(() => setFeedbackMsg(null), 3500);
+  };
+
+  const currentMode: GamePlayMode = config.gamePlayMode || 'session_top5';
+
+  return (
+    <div className="space-y-3.5">
+      {/* 0. CHỌN CHẾ ĐỘ CHƠI ĐẦU TIÊN & TÙY CHỈNH NỘI DUNG TRONG CHẾ ĐỘ */}
+      <section className="p-3 rounded-xl bg-stone-900/95 border border-emerald-500/40 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-bold text-emerald-300 flex items-center gap-1.5 uppercase tracking-wide">
+            <BarChart3 className="w-3.5 h-3.5" />
+            <span>1. Chọn Chế Độ Chơi & Tùy Chỉnh Phiên</span>
+          </h2>
+          <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-[10px] font-bold text-emerald-300">
+            {currentMode === 'session_top5'
+              ? 'Theo Phiên (Top 5)'
+              : 'Tự Do Tích Lũy'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={() => onUpdateConfig({ gamePlayMode: 'session_top5' })}
+            className={`p-2 rounded-lg border text-left transition cursor-pointer ${
+              currentMode === 'session_top5'
+                ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
+                : 'bg-stone-950 border-stone-800 text-stone-300 hover:bg-stone-900'
+            }`}
+          >
+            <div className="text-xs font-extrabold flex items-center justify-between">
+              <span>Gửi Quà Theo Phiên</span>
+              {currentMode === 'session_top5' && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              )}
+            </div>
+            <p className="text-[10px] text-stone-400 mt-0.5 leading-snug">
+              Chia phiên theo thời gian X, hiện đồng hồ & biểu đồ cột Top 5 tỉnh
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onUpdateConfig({ gamePlayMode: 'free_endless' })}
+            className={`p-2 rounded-lg border text-left transition cursor-pointer ${
+              currentMode === 'free_endless'
+                ? 'bg-amber-500/20 border-amber-400 text-amber-200'
+                : 'bg-stone-950 border-stone-800 text-stone-300 hover:bg-stone-900'
+            }`}
+          >
+            <div className="text-xs font-extrabold flex items-center justify-between">
+              <span>Tự Do Tích Lũy</span>
+              {currentMode === 'free_endless' && (
+                <span className="w-2 h-2 rounded-full bg-amber-400" />
+              )}
+            </div>
+            <p className="text-[10px] text-stone-400 mt-0.5 leading-snug">
+              Cộng dồn điểm liên tục các vòng, chỉ hiện bản đồ & Top 3
+            </p>
+          </button>
+        </div>
+
+        {/* Tùy chỉnh chi tiết khi chọn Chế độ Gửi quà theo phiên */}
+        {currentMode === 'session_top5' && (
+          <div className="p-2.5 rounded-lg bg-stone-950 border border-emerald-500/30 space-y-2.5">
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[10px] text-stone-400 mb-1">
+                  Tiêu đề phiên hiển thị:
+                </label>
+                <input
+                  type="text"
+                  value={config.sessionTitle || 'Đua Top Phiên'}
+                  onChange={(e) =>
+                    onUpdateConfig({ sessionTitle: e.target.value })
+                  }
+                  placeholder="Đua Top Phiên..."
+                  className="w-full px-2 py-1 rounded bg-stone-900 border border-stone-700 text-xs text-stone-100 focus:outline-none focus:border-emerald-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] text-stone-400 mb-1">
+                  Thời gian mỗi phiên X (giây):
+                </label>
+                <div className="flex items-center gap-1">
+                  <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <input
+                    type="number"
+                    min={15}
+                    max={3600}
+                    value={config.sessionDurationSec || 180}
+                    onChange={(e) =>
+                      onUpdateConfig({
+                        sessionDurationSec: Math.max(
+                          15,
+                          Number(e.target.value) || 60
+                        ),
+                      })
+                    }
+                    className="w-full px-2 py-1 rounded bg-stone-900 border border-stone-700 text-xs font-mono font-bold text-emerald-300 focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Nút chọn nhanh thời gian X */}
+            <div className="flex items-center gap-1 flex-wrap">
+              <span className="text-[10px] text-stone-400 mr-1">
+                Chọn nhanh X:
+              </span>
+              {[
+                { label: '30 giây', sec: 30 },
+                { label: '1 phút', sec: 60 },
+                { label: '2 phút', sec: 120 },
+                { label: '3 phút', sec: 180 },
+                { label: '5 phút', sec: 300 },
+              ].map((preset) => (
+                <button
+                  key={preset.sec}
+                  type="button"
+                  onClick={() =>
+                    onUpdateConfig({ sessionDurationSec: preset.sec })
+                  }
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition ${
+                    (config.sessionDurationSec || 180) === preset.sec
+                      ? 'bg-emerald-400 text-stone-950'
+                      : 'bg-stone-800 hover:bg-stone-700 text-stone-300'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-1 border-t border-stone-800">
+              <label className="flex items-center gap-1.5 text-[11px] text-stone-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={config.sessionAutoResetPoints !== false}
+                  onChange={(e) =>
+                    onUpdateConfig({
+                      sessionAutoResetPoints: e.target.checked,
+                    })
+                  }
+                  className="accent-emerald-500 rounded cursor-pointer"
+                />
+                <span>Hết phiên: Đọc Top 3 & Reset dữ liệu</span>
+              </label>
+
+              {onTriggerSessionEndNow && (
+                <button
+                  type="button"
+                  onClick={onTriggerSessionEndNow}
+                  className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-stone-950 text-[10.5px] font-extrabold cursor-pointer transition shrink-0 shadow"
+                >
+                  🏆 Chốt Phiên Ngay
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* 1. Test nhanh Gửi Quà (+1đ), Gửi Hoa Hồng (+5đ) & Gom Nhiều Người */}
+      <section className="p-3 rounded-xl bg-stone-900/90 border border-amber-500/40 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+            <Gift className="w-3.5 h-3.5" />
+            <span>2. Điều Khiển Gửi Quà Về Tỉnh</span>
+          </h2>
+          <span className="text-[10.5px] font-mono text-stone-400">
+            28 Tỉnh · 6 TP • Hoàng Sa & Trường Sa
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-[10px] text-stone-400 mb-1">
+              Tên người gửi thử:
+            </label>
+            <input
+              type="text"
+              value={testUsername}
+              onChange={(e) => setTestUsername(e.target.value)}
+              placeholder="Nhập tên người chơi..."
+              className="w-full px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-xs text-stone-100 focus:outline-none focus:border-amber-400"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] text-stone-400 mb-1">
+              Chọn Tỉnh / Thành phố:
+            </label>
+            <select
+              value={selectedProvinceId}
+              onChange={(e) => setSelectedProvinceId(e.target.value)}
+              className="w-full px-2 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-xs text-amber-200 focus:outline-none focus:border-amber-400"
+            >
+              {provinces.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} ({p.points}đ)
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() => handleSendBySelect(false)}
+            className="px-3 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition whitespace-nowrap"
+          >
+            <Gift className="w-3.5 h-3.5" />
+            <span>Gửi Quà (+{config.commentPoints}đ)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSendBySelect(true)}
+            className="px-3 py-2 rounded-lg bg-rose-500 hover:bg-rose-400 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition whitespace-nowrap"
+          >
+            <Flower2 className="w-3.5 h-3.5" />
+            <span>Gửi Hoa Hồng (+{config.rosePoints}đ)</span>
+          </button>
+        </div>
+
+        {/* Nút Test Gom Nhiều Người Cùng Tặng Về 1 Tỉnh */}
+        <button
+          type="button"
+          onClick={() =>
+            onTriggerBatchSameProvince(selectedProvinceId, 2, true)
+          }
+          className="w-full py-2 px-3 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/60 text-xs font-extrabold text-amber-200 flex items-center justify-center gap-1.5 cursor-pointer transition"
+        >
+          <Users className="w-3.5 h-3.5 text-amber-300" />
+          <span>
+            Test Gom 2 Người Cùng Tặng Hoa Về Tỉnh Này (Hiện 2 Avatar + Đọc Gộp)
+          </span>
+        </button>
+
+        <div className="grid grid-cols-3 gap-1.5 pt-1">
+          <button
+            type="button"
+            onClick={() => onTriggerRandomGift(false)}
+            className="px-2 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[11px] font-semibold text-emerald-300 flex items-center justify-center gap-1 cursor-pointer transition whitespace-nowrap"
+          >
+            <Shuffle className="w-3 h-3" />
+            <span>Ngẫu nhiên +{config.commentPoints}đ</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onTriggerRandomGift(true)}
+            className="px-2 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[11px] font-semibold text-rose-300 flex items-center justify-center gap-1 cursor-pointer transition whitespace-nowrap"
+          >
+            <Shuffle className="w-3 h-3" />
+            <span>Ngẫu nhiên +{config.rosePoints}đ</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onResetAllProvinces}
+            className="px-2 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/40 text-[11px] font-bold text-rose-200 flex items-center justify-center gap-1 cursor-pointer transition whitespace-nowrap"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Reset 0đ</span>
+          </button>
+        </div>
+      </section>
+
+      {/* 2. Giả lập nhập Comment tên tỉnh như trên TikTok Live */}
+      <section className="p-3 rounded-xl bg-stone-900/85 border border-stone-800 space-y-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-bold text-stone-200 flex items-center gap-1.5">
+            <MessageSquare className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Test Nhập Bình Luận Tên Tỉnh</span>
+          </h2>
+          <span className="text-[10px] text-stone-400">
+            Tự động tách tên tỉnh
+          </span>
+        </div>
+
+        <form onSubmit={handleSendFreeComment} className="flex gap-1.5">
+          <input
+            type="text"
+            value={customComment}
+            onChange={(e) => setCustomComment(e.target.value)}
+            placeholder="VD: cho mình gửi quà về Lạng Sơn / tặng hoa Nghệ An..."
+            className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-xs text-stone-100 focus:outline-none focus:border-cyan-400"
+          />
+          <button
+            type="submit"
+            className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-stone-950 font-bold text-xs flex items-center gap-1 shrink-0 cursor-pointer transition whitespace-nowrap"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>Bình luận</span>
+          </button>
+        </form>
+
+        {feedbackMsg && (
+          <div className="px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-800 text-[11px] text-amber-300">
+            {feedbackMsg}
+          </div>
+        )}
+      </section>
+
+      {/* 3. Bảng xếp hạng các Tỉnh đã có quà */}
+      <section className="p-3 rounded-xl bg-stone-900/85 border border-stone-800 space-y-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-bold text-amber-200 flex items-center gap-1.5">
+            <Trophy className="w-3.5 h-3.5 text-amber-400" />
+            <span>Các Tỉnh Đã Có Quà ({rankedProvinces.length}/34)</span>
+          </h2>
+          <span className="text-[10px] text-stone-400">
+            Bấm vào tỉnh để Zoom Camera
+          </span>
+        </div>
+
+        {rankedProvinces.length === 0 ? (
+          <div className="p-3 rounded-lg bg-stone-950 border border-stone-800 text-[11px] text-stone-400 text-center">
+            Chưa có tỉnh nào nhận quà. Khi điểm = 0, tên tỉnh sẽ ẩn trên map mặc định.
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
+            {rankedProvinces.map((prov, index) => (
+              <button
+                key={prov.id}
+                type="button"
+                onClick={() => onFocusProvince(prov.id)}
+                className="px-2.5 py-1.5 rounded-lg bg-stone-950 hover:bg-stone-800 border border-stone-800 flex items-center justify-between text-left cursor-pointer transition"
+              >
+                <div className="min-w-0 pr-1">
+                  <span className="text-[10px] font-mono text-amber-400 mr-1">
+                    #{index + 1}
+                  </span>
+                  <span className="text-xs font-bold text-stone-100 truncate">
+                    {prov.name}
+                  </span>
+                </div>
+                <span className="text-xs font-mono font-black text-emerald-400 tabular-nums shrink-0">
+                  {prov.points}đ
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* 4. Lịch sử gửi quà gần đây */}
+      <section className="p-3 rounded-xl bg-stone-900/85 border border-stone-800 space-y-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-bold text-stone-200">
+            Lịch Sử Gửi Quà Gần Nhất
+          </h2>
+          <span className="text-[10px] font-mono text-stone-400">
+            {activityLogs.length} lượt
+          </span>
+        </div>
+
+        <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
+          {activityLogs.length === 0 ? (
+            <div className="text-[11px] text-stone-500 italic py-2 text-center">
+              Chưa có lượt gửi quà nào...
+            </div>
+          ) : (
+            activityLogs.slice(0, 15).map((item) => (
+              <div
+                key={item.id}
+                className="px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-800/80 flex items-center justify-between text-[11px]"
+              >
+                <div className="truncate pr-2">
+                  <span className="font-mono text-[10px] text-stone-500 mr-1.5">
+                    {item.time}
+                  </span>
+                  <span className="font-bold text-amber-200">
+                    {item.username}
+                  </span>
+                  <span className="text-stone-400"> ➔ </span>
+                  <span className="font-bold text-emerald-300">
+                    {item.provinceName}
+                  </span>
+                </div>
+                <span
+                  className={`font-mono font-bold shrink-0 ${
+                    item.isRose ? 'text-rose-400' : 'text-emerald-400'
+                  }`}
+                >
+                  {item.isRose
+                    ? `🌹 +${item.pointsAdded}đ`
+                    : `🎁 +${item.pointsAdded}đ`}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+    </div>
+  );
+};

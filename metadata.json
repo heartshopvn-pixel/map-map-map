@@ -1,0 +1,6 @@
+{
+  "name": "Aethelgard: Chronicles of the Iron Crown — Isometric RTS Engine",
+  "description": "Real-time medieval empire strategy simulation engine with procedural terrain, garrison pathfinding, and dynamic siege combat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
