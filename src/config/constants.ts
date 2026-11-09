@@ -762,6 +762,7 @@ export const DEFAULT_CONFIG: GameConfig = {
 
   // Điểm thưởng & Gom hàng chờ (Batching)
   commentPoints: 1,
+  allowTripleCommentPerProvince: false,
   rosePoints: 5,
   batchWindowMs: 1200,
   maxBatchSenders: 12,

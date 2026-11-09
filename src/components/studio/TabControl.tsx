@@ -280,15 +280,16 @@ export const TabControl: React.FC<TabControlProps> = ({
     e.preventDefault();
     if (!customComment.trim()) return;
     const uname = testUsername.trim() || 'Người Chơi';
+    const maxPerProv = config.allowTripleCommentPerProvince ? 3 : 1;
     const matched = onSimulateComment(uname, customComment.trim());
     if (matched) {
       setFeedbackMsg(
-        `✅ Đã cộng +${config.commentPoints}đ cho "${uname}" từ bình luận "${customComment}" (1 lần/phiên)`
+        `✅ Đã cộng +${config.commentPoints}đ cho "${uname}" từ bình luận "${customComment}" (Tối đa ${maxPerProv} lần/tỉnh/ván • Được comment nhiều tỉnh khác nhau)`
       );
       setCustomComment('');
     } else {
       setFeedbackMsg(
-        '⚠️ Không cộng điểm: Có thể bình luận chưa đúng tên tỉnh, hoặc người chơi này đã bình luận +1 điểm trong phiên rồi (hãy gửi Hoa Hồng để cộng không giới hạn điểm)!'
+        `⚠️ Không cộng điểm: Bình luận chưa đúng tên tỉnh, hoặc "${uname}" đã đạt tối đa ${maxPerProv} lần comment cho tỉnh này trong ván hiện tại (có thể comment tỉnh khác, chờ sang ván mới, hoặc gửi Hoa Hồng không giới hạn)!`
       );
     }
     setTimeout(() => setFeedbackMsg(null), 4000);
@@ -607,9 +608,40 @@ export const TabControl: React.FC<TabControlProps> = ({
             </div>
           </div>
         )}
+
+        {/* Bật / Tắt cho phép mỗi ván comment trùng tỉnh 3 lần (+3đ) thay vì 1 lần / tỉnh / ván */}
+        <div className="p-2.5 rounded-lg bg-stone-950 border border-emerald-500/35 space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-[11px] font-extrabold text-emerald-300">
+                💬 Luật Comment Theo Tỉnh / Ván:
+              </div>
+              <p className="text-[10px] text-stone-400 leading-snug">
+                Người chơi được comment nhiều tỉnh khác nhau trong 1 ván &amp; tự mở lại khi sang ván mới
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateConfig({
+                  allowTripleCommentPerProvince: !config.allowTripleCommentPerProvince,
+                })
+              }
+              className={`px-2.5 py-1.5 rounded-lg text-[10.5px] font-black cursor-pointer transition shrink-0 border ${
+                config.allowTripleCommentPerProvince
+                  ? 'bg-emerald-500 text-stone-950 border-emerald-300 shadow'
+                  : 'bg-stone-800 hover:bg-stone-700 text-amber-300 border-amber-500/40'
+              }`}
+            >
+              {config.allowTripleCommentPerProvince
+                ? 'ĐANG BẬT: 3 LẦN / TỈNH / VÁN (+3Đ)'
+                : 'MẶC ĐỊNH: 1 LẦN / TỈNH / VÁN (+1Đ)'}
+            </button>
+          </div>
+        </div>
       </section>
 
-      {/* 1. Test nhanh Đến Tỉnh (+1đ, 1 lần/phiên), Gửi Hoa Hồng (+5đ) & Quà Đặc Biệt (>1 coin) */}
+      {/* 1. Test nhanh Đến Tỉnh (+1đ, 1 hoặc 3 lần/tỉnh/ván), Gửi Hoa Hồng (+5đ) & Quà Đặc Biệt (>1 coin) */}
       <section className="p-3 rounded-xl bg-stone-900/90 border border-amber-500/40 space-y-2.5">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
@@ -660,7 +692,10 @@ export const TabControl: React.FC<TabControlProps> = ({
             className="px-3 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition whitespace-nowrap"
           >
             <Gift className="w-3.5 h-3.5" />
-            <span>Bình luận (+{config.commentPoints}đ • 1 lần)</span>
+            <span>
+              Bình luận (+{config.commentPoints}đ •{' '}
+              {config.allowTripleCommentPerProvince ? '3 lần/tỉnh' : '1 lần/tỉnh'})
+            </span>
           </button>
 
           <button

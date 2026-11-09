@@ -240,6 +240,8 @@ export interface GameConfig {
 
   // Điểm thưởng sự kiện & Gom hàng chờ (Batching)
   commentPoints: number;
+  /** Bật/tắt cho phép mỗi ván có thể comment trùng tỉnh 3 lần để cộng đến 3 điểm thay vì 1 lần / tỉnh / ván (mặc định: false = 1 lần / tỉnh / ván) */
+  allowTripleCommentPerProvince?: boolean;
   rosePoints: number;
   batchWindowMs: number;
   maxBatchSenders: number;

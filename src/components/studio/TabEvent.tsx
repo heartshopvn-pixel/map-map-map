@@ -51,6 +51,30 @@ export const TabEvent: React.FC<TabEventProps> = ({
             </div>
           </div>
 
+          <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-stone-800">
+            <label className="flex items-center gap-1.5 text-[11px] text-stone-200 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={Boolean(config.allowTripleCommentPerProvince)}
+                onChange={(e) =>
+                  onUpdateConfig({
+                    allowTripleCommentPerProvince: e.target.checked,
+                  })
+                }
+                className="accent-emerald-500 rounded cursor-pointer"
+              />
+              <span>
+                Cho phép mỗi ván comment trùng tỉnh 3 lần (cộng đến +
+                {(config.commentPoints || 1) * 3} điểm / tỉnh / ván)
+              </span>
+            </label>
+            <span className="px-1.5 py-0.5 rounded bg-stone-900 border border-stone-700 text-[10px] font-mono text-amber-300 shrink-0">
+              {config.allowTripleCommentPerProvince
+                ? '3 lần/tỉnh/ván'
+                : '1 lần/tỉnh/ván'}
+            </span>
+          </div>
+
           <button
             type="button"
             onClick={() => onTriggerRandomGift(false)}

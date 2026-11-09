@@ -333,8 +333,15 @@ export function useClassroomEngine() {
 
   const userProvinceMemoryRef = useRef<Map<string, string>>(new Map());
   const userAvatarMemoryRef = useRef<Map<string, string>>(new Map());
-  // Trong mỗi phiên, mỗi người chơi chỉ được bình luận 1 lần để +1 điểm (nhưng được tặng hoa hồng không giới hạn)
-  const sessionCommentedUsersRef = useRef<Set<string>>(new Set());
+  // Lưu số lần bình luận của mỗi người chơi theo từng tỉnh trong ván hiện tại (Key: "userKey:provinceId" -> số lần)
+  // Mặc định: 1 lần / tỉnh / ván (hoặc 3 lần / tỉnh / ván khi bật allowTripleCommentPerProvince). Người chơi được comment nhiều tỉnh khác nhau trong cùng 1 ván!
+  const sessionProvinceCommentCountsRef = useRef<Map<string, number>>(new Map());
+
+  // Khi sang ván mới (roundNumber thay đổi), tự động xóa bộ đếm comment của ván cũ để người chơi comment lại bình thường
+  useEffect(() => {
+    sessionProvinceCommentCountsRef.current.clear();
+    recentGiftFingerprintMapRef.current.clear();
+  }, [config.roundNumber]);
 
   // Persist config & provinces
   useEffect(() => {
@@ -591,6 +598,7 @@ export function useClassroomEngine() {
   const handleSessionTimeUp = useCallback((sessionNum: number) => {
     if (isSessionEndingRef.current) return;
     isSessionEndingRef.current = true;
+    sessionProvinceCommentCountsRef.current.clear();
 
     // Khi kết thúc phiên chơi: xóa các hàng chờ 1 điểm (comment trong hàng chờ), chỉ giữ lại hàng chờ tặng quà (isRose = true)
     const giftOnlyQueue = cameraQueueRef.current.filter((q) =>
@@ -668,8 +676,9 @@ export function useClassroomEngine() {
         sessionEndTimeoutRef.current = null;
       }
 
-      // Reset giới hạn bình luận 1 lần/phiên cho phiên mới
-      sessionCommentedUsersRef.current.clear();
+      // Reset bộ đếm bình luận theo tỉnh/ván cho ván mới để người từng comment được comment lại
+      sessionProvinceCommentCountsRef.current.clear();
+      recentGiftFingerprintMapRef.current.clear();
 
       const freshProvinces = createInitialProvinces().map((baseProv) => {
         const currentProv = provincesRef.current.find(
@@ -703,6 +712,11 @@ export function useClassroomEngine() {
 
       syncService.sendCommand('UPDATE_PROVINCES_STATE', {
         provinces: freshProvinces,
+        roundNumber: nextRoundNum,
+        isNewRoundReset: true,
+      });
+      syncService.sendCommand('UPDATE_CONFIG', {
+        patch: { roundNumber: nextRoundNum },
       });
     };
 
@@ -801,28 +815,39 @@ export function useClassroomEngine() {
             )
           : Math.max(1, cfg.commentPoints || 1);
 
-      // 2. Chống bị bắn đúp cùng 1 gói quà / bình luận
-      const fingerprint = `${userKey}:${targetProv.id}:${payload.isRose ? 'R' : 'C'}:${isSpecialGift ? 'S' : 'N'}:${pointsAdded}:${roseCount}:${isFromNpc ? 'N' : 'U'}`;
+      // Kiểm tra giới hạn bình luận theo từng tỉnh trong mỗi ván:
+      // - Người chơi được phép comment NHIỀU tỉnh khác nhau trong 1 ván.
+      // - Với CÙNG 1 tỉnh trong 1 ván: mặc định tối đa 1 lần / tỉnh / ván (hoặc tối đa 3 lần / tỉnh / ván nếu bật allowTripleCommentPerProvince).
+      const userProvinceKey = `${userKey}:${targetProv.id}`;
+      const maxCommentsPerProvince = cfg.allowTripleCommentPerProvince ? 3 : 1;
+      const currentProvinceCommentCount =
+        sessionProvinceCommentCountsRef.current.get(userProvinceKey) || 0;
+
+      if (
+        !payload.isRose &&
+        !isFromNpc &&
+        !payload.bypassCommentLimit &&
+        currentProvinceCommentCount >= maxCommentsPerProvince
+      ) {
+        return { ok: false, reason: 'already_commented_in_session' };
+      }
+
+      // 2. Chống bị bắn đúp cùng 1 gói quà / bình luận do mạng gửi lặp gói tin
+      const commentSeqTag = payload.isRose ? 'R' : `C${currentProvinceCommentCount + 1}`;
+      const fingerprint = `${userKey}:${targetProv.id}:${commentSeqTag}:${isSpecialGift ? 'S' : 'N'}:${pointsAdded}:${roseCount}:${isFromNpc ? 'N' : 'U'}`;
       const lastExecAt =
         recentGiftFingerprintMapRef.current.get(fingerprint) || 0;
-      const throttleWindowMs = broadcastSync ? 380 : 5000;
+      const throttleWindowMs = broadcastSync ? 250 : 3500;
       if (now - lastExecAt < throttleWindowMs) {
         return { ok: false, reason: 'duplicate_gift_throttled' };
       }
       recentGiftFingerprintMapRef.current.set(fingerprint, now);
 
-      // Kiểm tra giới hạn: Trong mỗi phiên, người chơi thật chỉ được comment 1 lần để +1 điểm
-      if (
-        !payload.isRose &&
-        !isFromNpc &&
-        !payload.bypassCommentLimit &&
-        sessionCommentedUsersRef.current.has(userKey)
-      ) {
-        return { ok: false, reason: 'already_commented_in_session' };
-      }
-
       if (!payload.isRose && !isFromNpc) {
-        sessionCommentedUsersRef.current.add(userKey);
+        sessionProvinceCommentCountsRef.current.set(
+          userProvinceKey,
+          currentProvinceCommentCount + 1
+        );
       }
 
       const avatarColor = pickColorForUser(cleanUser);
@@ -1248,7 +1273,8 @@ export function useClassroomEngine() {
           false
         );
       } else if (action === 'RESET_ALL_PROVINCES') {
-        sessionCommentedUsersRef.current.clear();
+        sessionProvinceCommentCountsRef.current.clear();
+        recentGiftFingerprintMapRef.current.clear();
         const fresh = createInitialProvinces().map((baseProv) => {
           const cur = provincesRef.current.find((p) => p.id === baseProv.id);
           return {
@@ -1269,9 +1295,31 @@ export function useClassroomEngine() {
         action === 'UPDATE_PROVINCES_STATE' &&
         Array.isArray(payload.provinces)
       ) {
+        const isAllZero =
+          payload.isNewRoundReset ||
+          payload.provinces.every((p: any) => !Number(p?.points));
+        if (isAllZero) {
+          sessionProvinceCommentCountsRef.current.clear();
+          recentGiftFingerprintMapRef.current.clear();
+          isSessionEndingRef.current = false;
+          setSessionEndSummary(null);
+          if (typeof payload.roundNumber === 'number') {
+            setConfig((prev) => ({
+              ...prev,
+              roundNumber: payload.roundNumber,
+            }));
+          }
+        }
         provincesRef.current = payload.provinces;
         setProvinces(payload.provinces);
       } else if (action === 'UPDATE_CONFIG' && payload.patch) {
+        if (
+          payload.patch.roundNumber !== undefined &&
+          payload.patch.roundNumber !== configRef.current.roundNumber
+        ) {
+          sessionProvinceCommentCountsRef.current.clear();
+          recentGiftFingerprintMapRef.current.clear();
+        }
         setConfig((prev) => ({ ...prev, ...payload.patch }));
       } else if (action === 'CAMERA_CMD') {
         if (payload.cmd === 'RESET') {
@@ -1413,7 +1461,8 @@ export function useClassroomEngine() {
   }, []);
 
   const handleResetAllProvinces = useCallback((resetTop1Wins = false) => {
-    sessionCommentedUsersRef.current.clear();
+    sessionProvinceCommentCountsRef.current.clear();
+    recentGiftFingerprintMapRef.current.clear();
     const fresh = createInitialProvinces().map((baseProv) => {
       const cur = provincesRef.current.find((p) => p.id === baseProv.id);
       return {
@@ -1505,6 +1554,7 @@ export function useClassroomEngine() {
           pointsOverride: isRose
             ? Math.max(1, (configRef.current.rosePoints || 5) * coinCount)
             : undefined,
+          bypassCommentLimit: !customUsername,
         },
         true
       );
