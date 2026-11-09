@@ -108,6 +108,7 @@ interface DevStudioProps {
   onPushFullSyncToLive: () => void;
   compactRemoteStage: boolean;
   onToggleCompactRemoteStage: () => void;
+  onTriggerTurboBatchRead: () => { ok: boolean; count: number };
   onTriggerSessionEndNow?: () => void;
 }
 
@@ -180,6 +181,7 @@ export const DevStudio: React.FC<DevStudioProps> = ({
   onPushFullSyncToLive,
   compactRemoteStage,
   onToggleCompactRemoteStage,
+  onTriggerTurboBatchRead,
   onTriggerSessionEndNow,
 }) => {
   const [copiedLiveUrl, setCopiedLiveUrl] = useState(false);
@@ -343,12 +345,18 @@ export const DevStudio: React.FC<DevStudioProps> = ({
             config={config}
             provinces={provinces}
             activityLogs={activityLogs}
+            ttsStatus={ttsStatus}
+            eventTtsQueue={eventTtsQueue}
+            cameraQueue={cameraQueue}
             onUpdateConfig={onUpdateConfig}
             onSimulateComment={onSimulateComment}
             onTriggerRandomGift={onTriggerRandomGift}
             onTriggerBatchSameProvince={onTriggerBatchSameProvince}
             onResetAllProvinces={onResetAllProvinces}
             onFocusProvince={onFocusProvince}
+            onTriggerTurboBatchRead={onTriggerTurboBatchRead}
+            onClearEventTtsQueue={onClearEventTtsQueue}
+            onClearCameraQueue={onClearCameraQueue}
             onTriggerSessionEndNow={onTriggerSessionEndNow}
           />
         )}

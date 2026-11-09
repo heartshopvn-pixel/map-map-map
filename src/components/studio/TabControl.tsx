@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   BarChart3,
+  BookOpen,
   Clock,
   Flower2,
   Gift,
@@ -8,16 +9,35 @@ import {
   RotateCcw,
   Send,
   Shuffle,
+  Trash2,
   Trophy,
   Users,
+  Volume2,
+  Zap,
 } from 'lucide-react';
+import {
+  DEFAULT_HOW_TO_PLAY_CONFIG,
+  DEFAULT_LAYOUT_VISIBILITY,
+  HOW_TO_PLAY_BRIGHT_COLORS,
+  HOW_TO_PLAY_FONTS,
+} from '../../config/constants';
 import { ActivityLogItem } from '../../hooks/useClassroomEngine';
-import { GameConfig, GamePlayMode, ProvinceCell } from '../../types/game';
+import { EventTtsQueueSnapshot } from '../../services/soundEngine';
+import {
+  CameraQueueItem,
+  GameConfig,
+  GamePlayMode,
+  HowToPlayBoardConfig,
+  ProvinceCell,
+} from '../../types/game';
 
 interface TabControlProps {
   config: GameConfig;
   provinces: ProvinceCell[];
   activityLogs: ActivityLogItem[];
+  ttsStatus: { text: string; active: boolean };
+  eventTtsQueue: EventTtsQueueSnapshot;
+  cameraQueue: CameraQueueItem[];
   onUpdateConfig: (partial: Partial<GameConfig>) => void;
   onSimulateComment: (
     username: string,
@@ -40,6 +60,9 @@ interface TabControlProps {
   ) => void;
   onResetAllProvinces: () => void;
   onFocusProvince: (provinceId: string) => void;
+  onTriggerTurboBatchRead: () => { ok: boolean; count: number };
+  onClearEventTtsQueue: () => void;
+  onClearCameraQueue: () => void;
   onTriggerSessionEndNow?: () => void;
 }
 
@@ -47,12 +70,18 @@ export const TabControl: React.FC<TabControlProps> = ({
   config,
   provinces,
   activityLogs,
+  ttsStatus,
+  eventTtsQueue,
+  cameraQueue,
   onUpdateConfig,
   onSimulateComment,
   onTriggerRandomGift,
   onTriggerBatchSameProvince,
   onResetAllProvinces,
   onFocusProvince,
+  onTriggerTurboBatchRead,
+  onClearEventTtsQueue,
+  onClearCameraQueue,
   onTriggerSessionEndNow,
 }) => {
   const [testUsername, setTestUsername] = useState('Minh Khang');
@@ -63,6 +92,36 @@ export const TabControl: React.FC<TabControlProps> = ({
   );
   const [customComment, setCustomComment] = useState('');
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [turboToast, setTurboToast] = useState<string | null>(null);
+
+  const howToPlay: HowToPlayBoardConfig = {
+    ...DEFAULT_HOW_TO_PLAY_CONFIG,
+    ...(config.howToPlayConfig || {}),
+  };
+
+  const visibilityMap = {
+    ...DEFAULT_LAYOUT_VISIBILITY,
+    ...(config.layoutVisibility || {}),
+  };
+
+  const updateHowToPlay = (patch: Partial<HowToPlayBoardConfig>) => {
+    onUpdateConfig({
+      howToPlayConfig: {
+        ...howToPlay,
+        ...patch,
+      },
+    });
+  };
+
+  const toggleHowToPlayVisibility = () => {
+    const nextVal = !(visibilityMap.howToPlayBoard !== false);
+    onUpdateConfig({
+      layoutVisibility: {
+        ...visibilityMap,
+        howToPlayBoard: nextVal,
+      },
+    });
+  };
 
   const rankedProvinces = useMemo(
     () =>
@@ -71,6 +130,70 @@ export const TabControl: React.FC<TabControlProps> = ({
         .sort((a, b) => b.points - a.points),
     [provinces]
   );
+
+  // Tổng hợp hàng chờ sự kiện âm thanh + hàng chờ camera tỉnh đang chờ đọc
+  const combinedQueueDisplay = useMemo(() => {
+    const items: Array<{
+      id: string;
+      badge: string;
+      text: string;
+      isTurbo?: boolean;
+    }> = [];
+
+    for (const q of eventTtsQueue.detailedQueue) {
+      const prov = q.meta?.provinceName?.replace(/^TP\.\s*/i, '');
+      const user = q.meta?.username;
+      items.push({
+        id: q.id,
+        badge: q.isTurboBatch ? '⚡ Siêu tốc' : prov ? `🔊 ${prov}` : '🔊 Âm thanh',
+        text:
+          user && prov && !q.isTurboBatch
+            ? `${user} ➔ ${prov} (+${q.meta?.pointsAdded || 1}đ)`
+            : q.text,
+        isTurbo: Boolean(q.isTurboBatch),
+      });
+    }
+
+    for (const cam of cameraQueue) {
+      const cleanProv = cam.provinceName.replace(/^TP\.\s*/i, '');
+      items.push({
+        id: cam.id,
+        badge: `📍 ${cleanProv}`,
+        text: `${cam.username} gửi +${cam.pointsAdded}đ về ${cleanProv}`,
+      });
+    }
+
+    return items;
+  }, [cameraQueue, eventTtsQueue.detailedQueue]);
+
+  const selectablePendingCount = useMemo(() => {
+    const nonTurboTtsProvinceCount = eventTtsQueue.detailedQueue.filter(
+      (q) => !q.isTurboBatch && Boolean(q.meta?.provinceId)
+    ).length;
+    return nonTurboTtsProvinceCount + cameraQueue.length;
+  }, [cameraQueue.length, eventTtsQueue.detailedQueue]);
+
+  const handleClickTurboRead = () => {
+    const res = onTriggerTurboBatchRead();
+    if (res.ok) {
+      setTurboToast(
+        `⚡ Đã gom ${res.count} hàng chờ hiện tại để Đọc Siêu Tốc & Pan Camera nhanh! (Hàng chờ mới vẫn thêm bình thường)`
+      );
+    } else {
+      setTurboToast(
+        'ℹ️ Hiện chưa có hàng chờ tỉnh nào đang đợi. Bạn có thể bấm "+ Tạo 5 hàng chờ mẫu" để thử ngay!'
+      );
+    }
+    setTimeout(() => setTurboToast(null), 4000);
+  };
+
+  const handleSpawn5QueueSamples = () => {
+    for (let i = 0; i < 5; i++) {
+      onTriggerRandomGift(i % 2 === 1, undefined, undefined, true, 1);
+    }
+    setTurboToast('✅ Đã đẩy nhanh 5 lượt vào hàng chờ! Bấm "⚡ Đọc Siêu Tốc" để rút gọn ngay.');
+    setTimeout(() => setTurboToast(null), 3500);
+  };
 
   const handleSendBySelect = (isRose: boolean, roseComboCount = 1) => {
     const prov = provinces.find((p) => p.id === selectedProvinceId);
@@ -106,7 +229,129 @@ export const TabControl: React.FC<TabControlProps> = ({
 
   return (
     <div className="space-y-3.5">
-      {/* 0. CHỌN CHẾ ĐỘ CHƠI ĐẦU TIÊN, ĐẶT TÊN PHIÊN CHƠI & TÙY CHỈNH NỘI DUNG */}
+      {/* 0. THẺ GIỌNG ĐỌC AI & HÀNG CHỜ SỰ KIỆN ÂM THANH (ĐẶT LÊN ĐẦU DEV ĐIỀU KHIỂN) + NÚT ĐỌC SIÊU TỐC */}
+      <section className="p-3 rounded-xl bg-stone-900/95 border-2 border-amber-500/60 shadow-lg space-y-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-xs font-extrabold text-amber-300 flex items-center gap-1.5 uppercase tracking-wide">
+            <Volume2 className="w-4 h-4 text-amber-400" />
+            <span>Giọng Đọc AI & Hàng Chờ Sự Kiện Âm Thanh</span>
+          </h2>
+          <span
+            className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+              eventTtsQueue.isPlayingEvent
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                : 'bg-stone-800 text-stone-400'
+            }`}
+          >
+            {eventTtsQueue.isPlayingEvent ? ttsStatus.text || 'Đang đọc' : 'Sẵn sàng'}
+          </span>
+        </div>
+
+        {/* Câu đang phát hiện tại */}
+        <div className="p-2 rounded-lg bg-stone-950 border border-stone-800 space-y-1">
+          <div className="flex items-center justify-between text-[10px] text-stone-400">
+            <span>Đang phát trên Live:</span>
+            <span className="font-mono font-bold text-amber-300">
+              Đang chờ: {combinedQueueDisplay.length} mục (Có thể rút gọn:{' '}
+              {selectablePendingCount})
+            </span>
+          </div>
+          <div className="text-xs font-semibold text-stone-100 line-clamp-2 min-h-[32px] bg-stone-900/80 px-2.5 py-1.5 rounded border border-stone-800/80">
+            {eventTtsQueue.currentEventText ||
+              'Chưa có câu sự kiện nào đang phát...'}
+          </div>
+        </div>
+
+        {/* Nút Bấm ĐỌC SIÊU TỐC (Chọn tất cả hàng chờ hiện tại để đọc hàng loạt + pan camera siêu nhanh) */}
+        <div className="space-y-1.5">
+          <button
+            type="button"
+            onClick={handleClickTurboRead}
+            className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:via-orange-400 hover:to-rose-400 text-stone-950 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer transition shadow-md"
+          >
+            <Zap className="w-4 h-4 fill-stone-950" />
+            <span>
+              ⚡ ĐỌC SIÊU TỐC ({selectablePendingCount} HÀNG CHỜ HIỆN TẠI)
+            </span>
+          </button>
+
+          <div className="grid grid-cols-2 gap-1.5">
+            <button
+              type="button"
+              onClick={handleSpawn5QueueSamples}
+              className="py-1.5 px-2 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-700 text-[10.5px] font-bold text-amber-200 flex items-center justify-center gap-1 cursor-pointer transition"
+            >
+              <Shuffle className="w-3 h-3 text-amber-400" />
+              <span>+ Tạo 5 hàng chờ mẫu</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                onClearEventTtsQueue();
+                onClearCameraQueue();
+              }}
+              className="py-1.5 px-2 rounded-lg bg-rose-950/70 hover:bg-rose-900/80 border border-rose-500/40 text-[10.5px] font-bold text-rose-200 flex items-center justify-center gap-1 cursor-pointer transition"
+            >
+              <Trash2 className="w-3 h-3" />
+              <span>Xóa sạch hàng chờ</span>
+            </button>
+          </div>
+        </div>
+
+        {turboToast && (
+          <div className="px-2.5 py-1.5 rounded-lg bg-amber-500/15 border border-amber-400/50 text-[10.5px] font-semibold text-amber-200">
+            {turboToast}
+          </div>
+        )}
+
+        {/* Danh sách chi tiết Hàng Chờ Các Sự Kiện Âm Thanh */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[10px] text-stone-400">
+            <span className="font-bold uppercase tracking-wider text-stone-300">
+              Danh sách hàng chờ sự kiện âm thanh ({combinedQueueDisplay.length})
+            </span>
+            <span>Hàng mới tự thêm vào cuối</span>
+          </div>
+
+          <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
+            {combinedQueueDisplay.length === 0 ? (
+              <div className="py-2.5 px-3 rounded-lg bg-stone-950 border border-stone-800/80 text-[10.5px] text-stone-500 text-center italic">
+                Hàng chờ sự kiện âm thanh đang trống.
+              </div>
+            ) : (
+              combinedQueueDisplay.map((item, idx) => (
+                <div
+                  key={item.id}
+                  className={`px-2.5 py-1.5 rounded-lg border flex items-center justify-between gap-2 text-[11px] ${
+                    item.isTurbo
+                      ? 'bg-amber-950/40 border-amber-500/50 text-amber-100'
+                      : 'bg-stone-950 border-stone-800 text-stone-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="font-mono text-[10px] text-stone-500 shrink-0">
+                      #{idx + 1}
+                    </span>
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[9.5px] font-extrabold shrink-0 ${
+                        item.isTurbo
+                          ? 'bg-amber-400 text-stone-950'
+                          : 'bg-stone-800 text-amber-300'
+                      }`}
+                    >
+                      {item.badge}
+                    </span>
+                    <span className="truncate font-medium">{item.text}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* 1. CHỌN CHẾ ĐỘ CHƠI ĐẦU TIÊN, ĐẶT TÊN PHIÊN CHƠI & TÙY CHỈNH NỘI DUNG */}
       <section className="p-3 rounded-xl bg-stone-900/95 border border-emerald-500/40 space-y-2.5">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-bold text-emerald-300 flex items-center gap-1.5 uppercase tracking-wide">
@@ -418,7 +663,156 @@ export const TabControl: React.FC<TabControlProps> = ({
         )}
       </section>
 
-      {/* 3. Bảng xếp hạng các Tỉnh đã có quà */}
+      {/* 3. Bảng Hướng Dẫn Chơi Game (Nền tối + Chỉnh Size, Font, FontSize, 5 Màu Sáng) */}
+      <section className="p-3.5 rounded-xl bg-stone-900/90 border border-cyan-500/40 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <BookOpen className="w-4 h-4 text-cyan-400" />
+            <h2 className="text-xs font-bold text-cyan-300 uppercase tracking-wide">
+              Bảng Hướng Dẫn Chơi Game (Bảng Nền Tối)
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={toggleHowToPlayVisibility}
+            className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+              visibilityMap.howToPlayBoard !== false
+                ? 'bg-emerald-500 text-stone-950'
+                : 'bg-stone-800 text-stone-400'
+            }`}
+          >
+            {visibilityMap.howToPlayBoard !== false ? 'ĐANG HIỆN' : 'ĐANG ẨN'}
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <div>
+            <label className="block text-[10px] text-stone-400 mb-1">
+              Tiêu đề bảng hướng dẫn:
+            </label>
+            <input
+              type="text"
+              value={howToPlay.title}
+              onChange={(e) => updateHowToPlay({ title: e.target.value })}
+              placeholder="HƯỚNG DẪN CHƠI GAME..."
+              className="w-full px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-xs text-stone-100"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] text-stone-400 mb-1">
+              Nội dung hướng dẫn:
+            </label>
+            <textarea
+              rows={2}
+              value={howToPlay.content}
+              onChange={(e) => updateHowToPlay({ content: e.target.value })}
+              placeholder="Nhập hướng dẫn chơi game..."
+              className="w-full px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-xs text-stone-100"
+            />
+          </div>
+
+          {/* Chọn 5 màu sáng nổi bật trên nền tối */}
+          <div>
+            <label className="block text-[10px] text-stone-400 mb-1">
+              Chọn 5 Màu Sáng (Trên nền bảng tối):
+            </label>
+            <div className="grid grid-cols-5 gap-1.5">
+              {HOW_TO_PLAY_BRIGHT_COLORS.map((col) => {
+                const selected =
+                  (howToPlay.textColor || '#FDE047').toUpperCase() ===
+                  col.hex.toUpperCase();
+                return (
+                  <button
+                    key={col.id}
+                    type="button"
+                    onClick={() => updateHowToPlay({ textColor: col.hex })}
+                    className={`py-1.5 px-1 rounded-lg border text-[10px] font-bold flex flex-col items-center gap-1 cursor-pointer transition ${
+                      selected
+                        ? 'bg-stone-800 border-white ring-1 ring-white'
+                        : 'bg-stone-950 border-stone-800 hover:bg-stone-900'
+                    }`}
+                  >
+                    <span
+                      className="w-4 h-4 rounded-full border border-black/40 shadow"
+                      style={{ backgroundColor: col.hex }}
+                    />
+                    <span
+                      className="truncate max-w-full text-[9px]"
+                      style={{ color: col.hex }}
+                    >
+                      {col.label.split(' ')[0]}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Chọn Font chữ */}
+          <div>
+            <label className="block text-[10px] text-stone-400 mb-1">
+              Kiểu Font chữ:
+            </label>
+            <select
+              value={howToPlay.fontFamily}
+              onChange={(e) => updateHowToPlay({ fontFamily: e.target.value })}
+              className="w-full px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-xs text-amber-200"
+            >
+              {HOW_TO_PLAY_FONTS.map((f) => (
+                <option key={f.id} value={f.family}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Chỉnh Size bảng (Width) & FontSize */}
+          <div className="grid grid-cols-2 gap-2 pt-1">
+            <div className="p-2 rounded-lg bg-stone-950 border border-stone-800">
+              <div className="flex justify-between text-[10.5px] mb-1">
+                <span className="text-stone-400">Độ rộng bảng (Size):</span>
+                <span className="font-mono font-bold text-cyan-300">
+                  {howToPlay.widthPx}px
+                </span>
+              </div>
+              <input
+                type="range"
+                min={160}
+                max={500}
+                step={5}
+                value={howToPlay.widthPx || 250}
+                onChange={(e) =>
+                  updateHowToPlay({ widthPx: Number(e.target.value) })
+                }
+                className="w-full accent-cyan-400 cursor-pointer"
+              />
+            </div>
+
+            <div className="p-2 rounded-lg bg-stone-950 border border-stone-800">
+              <div className="flex justify-between text-[10.5px] mb-1">
+                <span className="text-stone-400">Cỡ chữ (FontSize):</span>
+                <span className="font-mono font-bold text-amber-300">
+                  {howToPlay.fontSizePx}px
+                </span>
+              </div>
+              <input
+                type="range"
+                min={8}
+                max={22}
+                step={1}
+                value={howToPlay.fontSizePx || 11}
+                onChange={(e) =>
+                  updateHowToPlay({ fontSizePx: Number(e.target.value) })
+                }
+                className="w-full accent-amber-400 cursor-pointer"
+              />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* 4. Bảng xếp hạng các Tỉnh đã có quà */}
       <section className="p-3 rounded-xl bg-stone-900/85 border border-stone-800 space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-bold text-amber-200 flex items-center gap-1.5">
@@ -460,7 +854,7 @@ export const TabControl: React.FC<TabControlProps> = ({
         )}
       </section>
 
-      {/* 4. Lịch sử gửi quà gần đây */}
+      {/* 5. Lịch sử gửi quà gần đây */}
       <section className="p-3 rounded-xl bg-stone-900/85 border border-stone-800 space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-bold text-stone-200">

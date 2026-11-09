@@ -95,6 +95,7 @@ export interface CameraFocusState {
   totalRoses?: number;
   totalGifts?: number;
   startedAt?: number;
+  isTurboPan?: boolean;
   until: number;
 }
 

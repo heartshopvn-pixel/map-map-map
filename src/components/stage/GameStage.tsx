@@ -646,8 +646,9 @@ export const GameStage: React.FC<GameStageProps> = ({
     const startTy = animCameraRef.current.ty;
     const startZoom = animCameraRef.current.zoom;
 
-    const durationMs =
-      Math.max(0.18, Math.min(1.6, config.cameraSmoothSpeed || 0.5)) * 1000;
+    const durationMs = cameraFocus.isTurboPan
+      ? 150
+      : Math.max(0.18, Math.min(1.6, config.cameraSmoothSpeed || 0.5)) * 1000;
     const startTime = performance.now();
     let rafId = 0;
 

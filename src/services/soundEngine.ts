@@ -32,7 +32,9 @@ export interface TTSQueueItem {
   text: string;
   isPriority: boolean;
   addedAt: number;
+  isTurboBatch?: boolean;
   meta?: TTSQueueItemMeta;
+  onStart?: () => void;
   onDone?: () => void;
 }
 
@@ -692,6 +694,84 @@ class SoundService {
     return this.isSpeaking || this.ttsQueue.length > 0;
   }
 
+  public isTurboBatchActive(): boolean {
+    if (this.isSpeaking && this.activeEventItem?.isTurboBatch) {
+      return true;
+    }
+    return this.ttsQueue.some((q) => Boolean(q.isTurboBatch));
+  }
+
+  /**
+   * Trích xuất tất cả các sự kiện tỉnh đang chờ trong `ttsQueue` (chưa đọc và không thuộc gói Turbo trước đó)
+   * để đưa vào gói Đọc Siêu Tốc.
+   */
+  public extractPendingProvinceQueueItems(): TTSQueueItem[] {
+    const extracted = this.ttsQueue.filter(
+      (q) => !q.isTurboBatch && Boolean(q.meta?.provinceId)
+    );
+    this.ttsQueue = this.ttsQueue.filter(
+      (q) => q.isTurboBatch || !q.meta?.provinceId
+    );
+    this.emitEventQueue();
+    return extracted;
+  }
+
+  /**
+   * Đẩy gói Đọc Siêu Tốc vào đầu hàng chờ:
+   * - Mở đầu: "Do hàng chờ quá nhiều, tui sẽ đọc hàng loạt để rút gọn nhé"
+   * - Tiếp theo đọc lần lượt từng mục: "[Tên] gửi điểm về [Tỉnh]" kèm callback `onStart` để pan camera siêu nhanh tới tỉnh đó!
+   * - Trong lúc đang đọc, các sự kiện mới phát sinh vẫn thêm vào cuối hàng chờ bình thường.
+   */
+  public enqueueTurboBatchItems(
+    batchSteps: Array<{
+      text: string;
+      provinceId?: string;
+      provinceName?: string;
+      username?: string;
+      pointsAdded?: number;
+      isRose?: boolean;
+      onStart?: () => void;
+      onDone?: () => void;
+    }>,
+    config: GameConfig
+  ) {
+    this.latestConfig = config;
+    if (batchSteps.length === 0) return;
+
+    const now = Date.now();
+    const turboItems: TTSQueueItem[] = batchSteps.map((step, idx) => ({
+      id: `turbo_${now}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+      text: sanitizeAndLimitSpeechText(step.text, 65) || step.text,
+      isPriority: true,
+      isTurboBatch: true,
+      addedAt: now + idx,
+      meta: step.provinceId
+        ? {
+            provinceId: step.provinceId,
+            provinceName: step.provinceName,
+            username: step.username,
+            pointsAdded: step.pointsAdded,
+            isRose: step.isRose,
+          }
+        : undefined,
+      onStart: step.onStart,
+      onDone: step.onDone,
+    }));
+
+    // Chèn ngay sau các mục turbo đang dở (nếu có), nhưng đứng trước các hàng chờ mới phát sinh
+    let insertIdx = 0;
+    while (
+      insertIdx < this.ttsQueue.length &&
+      this.ttsQueue[insertIdx].isTurboBatch
+    ) {
+      insertIdx++;
+    }
+    this.ttsQueue.splice(insertIdx, 0, ...turboItems);
+
+    this.emitEventQueue();
+    this.processQueue(config);
+  }
+
   public clearEventQueue() {
     const callbacks = [
       this.activeEventItem?.onDone,
@@ -1330,7 +1410,7 @@ class SoundService {
           : [];
 
       const existingIdx = this.ttsQueue.findIndex(
-        (q) => q.meta?.provinceId === meta.provinceId
+        (q) => !q.isTurboBatch && q.meta?.provinceId === meta.provinceId
       );
 
       if (existingIdx !== -1 && incomingNames.length > 0) {
@@ -1538,16 +1618,21 @@ class SoundService {
 
     let nextItem = this.ttsQueue.shift()!;
 
-    // Mỗi lần bắt đầu đọc: kiểm tra toàn bộ hàng chờ TTS xem còn ai vào CÙNG TỈNH này không,
+    // Mỗi lần bắt đầu đọc (chế độ thường, không phải mục Đọc Siêu Tốc):
+    // kiểm tra toàn bộ hàng chờ TTS xem còn ai vào CÙNG TỈNH này không,
     // nếu có thì rút hết ra đọc 1 lúc tất cả các tên cho hết nhanh hàng chờ!
-    if (nextItem.meta?.provinceId && nextItem.meta?.provinceName) {
+    if (
+      !nextItem.isTurboBatch &&
+      nextItem.meta?.provinceId &&
+      nextItem.meta?.provinceName
+    ) {
       const targetProvId = nextItem.meta.provinceId;
       const sameProvItems = this.ttsQueue.filter(
-        (q) => q.meta?.provinceId === targetProvId
+        (q) => !q.isTurboBatch && q.meta?.provinceId === targetProvId
       );
       if (sameProvItems.length > 0) {
         this.ttsQueue = this.ttsQueue.filter(
-          (q) => q.meta?.provinceId !== targetProvId
+          (q) => q.isTurboBatch || q.meta?.provinceId !== targetProvId
         );
         const allNames = new Set<string>(
           nextItem.meta.usernamesList ||
@@ -1601,7 +1686,9 @@ class SoundService {
     }
 
     const nextText = nextItem.text;
+    const itemStartCallback = nextItem.onStart;
     const itemCallback = nextItem.onDone;
+    const isTurboItem = Boolean(nextItem.isTurboBatch);
     const token = ++this.speechTokenSeq;
     let finishedOnce = false;
 
@@ -1624,8 +1711,32 @@ class SoundService {
     this.isSpeaking = true;
     this.activeEventItem = nextItem;
     this.currentEventText = nextText;
-    this.emitStatus('Đang đọc Giọng AI #3...', true, nextText);
+    this.emitStatus(
+      isTurboItem ? '⚡ Đang đọc Siêu Tốc...' : 'Đang đọc Giọng AI #3...',
+      true,
+      nextText
+    );
     this.emitEventQueue();
+
+    if (itemStartCallback) {
+      try {
+        itemStartCallback();
+      } catch {
+        // Ignore start callback error
+      }
+    }
+
+    // Prefetch trước tối đa 3 câu tiếp theo trong hàng chờ để nối câu Siêu Tốc không có độ trễ
+    const voiceForPrefetch = config.nodeVoice || 'google-vi-gtx';
+    for (let i = 0; i < Math.min(3, this.ttsQueue.length); i++) {
+      const upcomingChunks = splitSpeechIntoChunks(this.ttsQueue[i].text, 165);
+      if (upcomingChunks[0]) {
+        const prefetchUrl = `/api/tts?lang=vi&voice=${encodeURIComponent(
+          voiceForPrefetch
+        )}&text=${encodeURIComponent(upcomingChunks[0])}`;
+        void this.getOrFetchAudioBlobUrl(prefetchUrl, 2400);
+      }
+    }
 
     const finish = () => {
       if (finishedOnce || token !== this.speechTokenSeq) return;
@@ -1644,27 +1755,40 @@ class SoundService {
           // Ignore callback error
         }
       }
-      setTimeout(() => {
-        if (this.latestConfig) {
-          this.processQueue(this.latestConfig);
-        }
-      }, 80);
+      setTimeout(
+        () => {
+          if (this.latestConfig) {
+            this.processQueue(this.latestConfig);
+          }
+        },
+        isTurboItem ? 25 : 80
+      );
     };
+
+    const effectiveConfig: GameConfig = isTurboItem
+      ? {
+          ...config,
+          ttsRate: Math.min(1.65, Math.max(1.26, (config.ttsRate || 1.15) * 1.15)),
+        }
+      : config;
 
     if (this.isTabMuted()) {
       const wordCount = nextText.split(/\s+/).filter(Boolean).length;
       const simDurationMs = Math.max(
-        1200,
+        isTurboItem ? 750 : 1200,
         Math.min(
           6500,
-          Math.round((wordCount * 290) / Math.max(0.5, config.ttsRate || 1))
+          Math.round(
+            (wordCount * (isTurboItem ? 210 : 290)) /
+              Math.max(0.5, effectiveConfig.ttsRate || 1)
+          )
         )
       );
       this.mutedSimTimer = setTimeout(finish, simDurationMs);
       return;
     }
 
-    this.playViaVoice3(nextText, config, token, finish);
+    this.playViaVoice3(nextText, effectiveConfig, token, finish);
   }
 
   /**

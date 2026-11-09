@@ -420,10 +420,9 @@ export function useClassroomEngine() {
   );
 
   /**
-   * Ghi nhận điểm số + lưu toàn bộ người chơi đóng góp trong phiên (tối đa 24 người/tỉnh) + đọc AI #3
-   * Đọc gộp TẤT CẢ tên người chơi trong lượt tỉnh đó cùng lúc kèm % câu chào / vu vơ hoặc lời cảm ơn nhiều hoa hồng!
+   * Cộng điểm + lưu người đóng góp + ghi lịch sử cho tỉnh (tách riêng để dùng cho cả chế độ thường và Đọc Siêu Tốc)
    */
-  const commitGiftTurnToProvinceAndTTS = useCallback(
+  const commitPointsOnlyToProvince = useCallback(
     (
       provinceId: string,
       provinceName: string,
@@ -498,6 +497,32 @@ export function useClassroomEngine() {
         time: timeStr,
       }));
       setActivityLogs((prev) => [...newLogs, ...prev].slice(0, 40));
+    },
+    []
+  );
+
+  /**
+   * Ghi nhận điểm số + lưu toàn bộ người chơi đóng góp trong phiên (tối đa 24 người/tỉnh) + đọc AI #3
+   * Đọc gộp TẤT CẢ tên người chơi trong lượt tỉnh đó cùng lúc kèm % câu chào / vu vơ hoặc lời cảm ơn nhiều hoa hồng!
+   */
+  const commitGiftTurnToProvinceAndTTS = useCallback(
+    (
+      provinceId: string,
+      provinceName: string,
+      senders: ProvinceContributor[],
+      totalPointsAdded: number,
+      totalRosesAdded: number,
+      totalGiftsAdded: number
+    ) => {
+      const cfg = configRef.current;
+      commitPointsOnlyToProvince(
+        provinceId,
+        provinceName,
+        senders,
+        totalPointsAdded,
+        totalRosesAdded,
+        totalGiftsAdded
+      );
 
       const anyRose = totalRosesAdded > 0 || senders.some((s) => s.isRose);
       // NPC hỗ trợ 1 điểm (!isRose) được coi là người chơi bình thường, không đọc từ "NPC"
@@ -538,7 +563,7 @@ export function useClassroomEngine() {
         totalRoses: totalRosesAdded,
       });
     },
-    []
+    [commitPointsOnlyToProvince]
   );
 
   /**
@@ -584,7 +609,7 @@ export function useClassroomEngine() {
    */
   useEffect(() => {
     const timer = setInterval(() => {
-      if (isSessionEndingRef.current) {
+      if (isSessionEndingRef.current || soundEngine.isTurboBatchActive()) {
         return;
       }
 
@@ -759,38 +784,23 @@ export function useClassroomEngine() {
       setProvinces(updatedWithWin);
     }
 
+    // Bảng tổng kết chỉ đọc ngắn gọn Top 1, 2, 3 tỉnh + điểm (không đọc tên người top để tránh quá dài khi hàng chờ nhiều)
     const summarySentences: string[] = [];
     if (scoredTop3.length === 0) {
       summarySentences.push(
-        `Kết thúc ${sessionName} ${sessionNum}. Chưa có tỉnh nào ghi điểm trong phiên này.`
+        `Kết thúc ${sessionName} ${sessionNum}. Chưa có tỉnh nào ghi điểm.`
       );
     } else {
-      summarySentences.push(
-        `Kết thúc ${sessionName} ${sessionNum}! Tổng kết 3 tỉnh dẫn đầu phiên:`
-      );
-      scoredTop3.forEach((p, idx) => {
+      const rankPhrases = scoredTop3.map((p, idx) => {
         const rankName =
-          idx === 0 ? 'Hạng nhất' : idx === 1 ? 'Hạng nhì' : 'Hạng ba';
-        const topContributor = [...(p.recentContributors || [])].sort(
-          (a, b) => b.pointsAdded - a.pointsAdded
-        )[0];
-        const contributorPhrase = topContributor
-          ? `, người tặng điểm nhiều nhất là ${topContributor.username.replace(
-              /^NPC\s+/i,
-              ''
-            )} với ${topContributor.pointsAdded} điểm`
-          : '';
-        summarySentences.push(
-          `${rankName} thuộc về ${p.name.replace(/^TP\.\s*/i, '')} với ${
-            p.points
-          } điểm${contributorPhrase}.`
-        );
+          idx === 0 ? 'Top 1' : idx === 1 ? 'Top 2' : 'Top 3';
+        return `${rankName} ${p.name.replace(/^TP\.\s*/i, '')} ${p.points} điểm`;
       });
-      const deferNote =
-        deferredCount > 0
-          ? ` Còn ${deferredCount} lượt trong hàng chờ sẽ chuyển sang phiên mới.`
-          : '';
-      summarySentences.push(`Xin chúc mừng các tỉnh dẫn đầu!${deferNote}`);
+      summarySentences.push(
+        `Kết thúc ${sessionName} ${sessionNum}! Tổng kết dẫn đầu: ${rankPhrases.join(
+          ', '
+        )}.`
+      );
     }
 
     const speechText = summarySentences.join(' ');
@@ -1695,6 +1705,147 @@ export function useClassroomEngine() {
     syncService.sendCommand('CLEAR_TTS_QUEUE', {});
   }, []);
 
+  /**
+   * ĐỌC SIÊU TỐC (Turbo Batch Read):
+   * - Chụp lại TẤT CẢ hàng chờ hiện tại tại thời điểm bấm nút (`ttsQueue` + `cameraQueue`).
+   * - Giải phóng `cameraQueue` hiện tại để trong lúc đang đọc siêu tốc, hàng chờ mới cứ thêm vào bình thường!
+   * - Đọc câu mở đầu: "Do hàng chờ quá nhiều, tui sẽ đọc hàng loạt để rút gọn nhé"
+   * - Tiếp theo đọc lần lượt từng mục: "[Tên] gửi điểm về [Tỉnh]" đồng thời pan camera siêu nhanh (150ms) tới từng tỉnh đó cho tới khi hết số hàng chờ đã chọn!
+   */
+  const handleTriggerTurboBatchRead = useCallback((): {
+    ok: boolean;
+    count: number;
+  } => {
+    const pendingTtsItems = soundEngine.extractPendingProvinceQueueItems();
+    const pendingCamItems = [...cameraQueueRef.current];
+
+    if (pendingTtsItems.length === 0 && pendingCamItems.length === 0) {
+      return { ok: false, count: 0 };
+    }
+
+    // Giải phóng cameraQueue hiện tại để các sự kiện mới phát sinh trong lúc đang đọc Siêu Tốc cứ xếp hàng bình thường
+    cameraQueueRef.current = [];
+    setCameraQueue([]);
+
+    const batchSteps: Array<{
+      text: string;
+      provinceId?: string;
+      provinceName?: string;
+      username?: string;
+      pointsAdded?: number;
+      isRose?: boolean;
+      onStart?: () => void;
+      onDone?: () => void;
+    }> = [
+      {
+        text: 'Do hàng chờ quá nhiều, tui sẽ đọc hàng loạt để rút gọn nhé!',
+      },
+    ];
+
+    // 1. Các mục đã cộng điểm và đang nằm chờ trong ttsQueue
+    for (const ttsItem of pendingTtsItems) {
+      const provId = ttsItem.meta?.provinceId;
+      const rawProvName = ttsItem.meta?.provinceName || 'Tỉnh';
+      const cleanProv = rawProvName.replace(/^TP\.\s*/i, '').trim();
+      const rawNames =
+        ttsItem.meta?.usernamesList && ttsItem.meta.usernamesList.length > 0
+          ? ttsItem.meta.usernamesList
+          : [ttsItem.meta?.username || 'Người chơi'];
+      const cleanNames = Array.from(
+        new Set(rawNames.map((n) => n.replace(/^NPC\s+/i, '').trim()))
+      ).join(', ');
+      const pts = Number(ttsItem.meta?.pointsAdded || 1);
+      const isRose = Boolean(ttsItem.meta?.isRose);
+
+      batchSteps.push({
+        text: `${cleanNames} gửi điểm về ${cleanProv}`,
+        provinceId: provId,
+        provinceName: rawProvName,
+        username: cleanNames,
+        pointsAdded: pts,
+        isRose,
+        onStart: () => {
+          if (!provId) return;
+          const now = Date.now();
+          const targetProv = provincesRef.current.find((p) => p.id === provId);
+          const turboFocus: CameraFocusState = {
+            provinceId: provId,
+            provinceName: rawProvName,
+            username: cleanNames,
+            pointsAdded: pts,
+            isRose,
+            senders: targetProv?.recentContributors?.slice(0, 4) || [],
+            startedAt: now,
+            isTurboPan: true,
+            until: now + 950,
+          };
+          cameraFocusRef.current = turboFocus;
+          setCameraFocus(turboFocus);
+        },
+      });
+    }
+
+    // 2. Các mục đang nằm chờ trong cameraQueue (chưa cộng điểm vào tỉnh)
+    for (const camItem of pendingCamItems) {
+      const mergedSenders = mergeContributorsByUser([], camItem.senders);
+      const cleanNames = Array.from(
+        new Set(
+          mergedSenders.map((s) => s.username.replace(/^NPC\s+/i, '').trim())
+        )
+      ).join(', ');
+      const cleanProv = camItem.provinceName.replace(/^TP\.\s*/i, '').trim();
+      const lastSender = mergedSenders[mergedSenders.length - 1];
+
+      batchSteps.push({
+        text: `${cleanNames} gửi điểm về ${cleanProv}`,
+        provinceId: camItem.provinceId,
+        provinceName: camItem.provinceName,
+        username: cleanNames,
+        pointsAdded: camItem.pointsAdded,
+        isRose: camItem.isRose,
+        onStart: () => {
+          const now = Date.now();
+          commitPointsOnlyToProvince(
+            camItem.provinceId,
+            camItem.provinceName,
+            mergedSenders,
+            camItem.pointsAdded,
+            camItem.totalRoses,
+            camItem.totalGifts
+          );
+          const turboFocus: CameraFocusState = {
+            provinceId: camItem.provinceId,
+            provinceName: camItem.provinceName,
+            username: cleanNames,
+            avatarUrl: lastSender?.avatarUrl || camItem.avatarUrl,
+            avatarColor: lastSender?.avatarColor || camItem.avatarColor,
+            pointsAdded: camItem.pointsAdded,
+            isRose: camItem.isRose,
+            senders: mergedSenders,
+            totalRoses: camItem.totalRoses,
+            totalGifts: camItem.totalGifts,
+            startedAt: now,
+            isTurboPan: true,
+            until: now + 950,
+          };
+          cameraFocusRef.current = turboFocus;
+          setCameraFocus(turboFocus);
+          spawnThrowAvatarFX({
+            provinceId: camItem.provinceId,
+            provinceName: camItem.provinceName,
+            senders: mergedSenders,
+          });
+        },
+      });
+    }
+
+    soundEngine.enqueueTurboBatchItems(batchSteps, configRef.current);
+    return {
+      ok: true,
+      count: pendingTtsItems.length + pendingCamItems.length,
+    };
+  }, [commitPointsOnlyToProvince, mergeContributorsByUser, spawnThrowAvatarFX]);
+
   const handlePushFullSyncToLive = useCallback(() => {
     syncService.sendCommand('UPDATE_CONFIG', { patch: configRef.current });
     syncService.sendCommand('UPDATE_PROVINCES_STATE', {
@@ -1875,6 +2026,7 @@ export function useClassroomEngine() {
     handlePanicMute,
     handleTestTTS,
     handleClearEventTtsQueue,
+    handleTriggerTurboBatchRead,
     handlePushFullSyncToLive,
     handleSaveBackupJson,
     handleLoadBackupJson,

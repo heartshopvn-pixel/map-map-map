@@ -259,6 +259,7 @@ export default function App() {
           onPushFullSyncToLive={engine.handlePushFullSyncToLive}
           compactRemoteStage={compactRemoteStage}
           onToggleCompactRemoteStage={handleToggleCompactRemoteStage}
+          onTriggerTurboBatchRead={engine.handleTriggerTurboBatchRead}
           onTriggerSessionEndNow={() =>
             engine.handleSessionTimeUp(engine.config.roundNumber || 69)
           }

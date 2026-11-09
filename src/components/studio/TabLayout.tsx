@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import {
-  BookOpen,
   Download,
   Eye,
   EyeOff,
@@ -16,16 +15,12 @@ import {
 } from 'lucide-react';
 import {
   DEFAULT_GIFT_GUIDE_ITEMS,
-  DEFAULT_HOW_TO_PLAY_CONFIG,
   DEFAULT_LAYOUT_POSITIONS,
   DEFAULT_LAYOUT_VISIBILITY,
-  HOW_TO_PLAY_BRIGHT_COLORS,
-  HOW_TO_PLAY_FONTS,
 } from '../../config/constants';
 import {
   GameConfig,
   GiftGuideItem,
-  HowToPlayBoardConfig,
   LayoutElementKey,
 } from '../../types/game';
 
@@ -139,11 +134,6 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
       ? config.giftGuideItems
       : DEFAULT_GIFT_GUIDE_ITEMS;
 
-  const howToPlay: HowToPlayBoardConfig = {
-    ...DEFAULT_HOW_TO_PLAY_CONFIG,
-    ...(config.howToPlayConfig || {}),
-  };
-
   const visibilityMap = {
     ...DEFAULT_LAYOUT_VISIBILITY,
     ...(config.layoutVisibility || {}),
@@ -166,15 +156,6 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
     }
     e.target.value = '';
     setTimeout(() => setJsonToast(null), 4000);
-  };
-
-  const updateHowToPlay = (patch: Partial<HowToPlayBoardConfig>) => {
-    onUpdateConfig({
-      howToPlayConfig: {
-        ...howToPlay,
-        ...patch,
-      },
-    });
   };
 
   const handleToggleElementVisibility = (key: LayoutElementKey) => {
@@ -614,156 +595,7 @@ export const TabLayout: React.FC<TabLayoutProps> = ({
         </div>
       </section>
 
-      {/* 3. Bảng Hướng Dẫn Chơi Game (Nền tối + Chỉnh Size, Font, FontSize, 5 Màu Sáng) */}
-      <section className="p-3.5 rounded-xl bg-stone-900/90 border border-cyan-500/40 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <BookOpen className="w-4 h-4 text-cyan-400" />
-            <h2 className="text-xs font-bold text-cyan-300 uppercase tracking-wide">
-              Bảng Hướng Dẫn Chơi Game (Bảng Nền Tối)
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={() => handleToggleElementVisibility('howToPlayBoard')}
-            className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
-              visibilityMap.howToPlayBoard !== false
-                ? 'bg-emerald-500 text-stone-950'
-                : 'bg-stone-800 text-stone-400'
-            }`}
-          >
-            {visibilityMap.howToPlayBoard !== false ? 'ĐANG HIỆN' : 'ĐANG ẨN'}
-          </button>
-        </div>
-
-        <div className="space-y-2">
-          <div>
-            <label className="block text-[10px] text-stone-400 mb-1">
-              Tiêu đề bảng hướng dẫn:
-            </label>
-            <input
-              type="text"
-              value={howToPlay.title}
-              onChange={(e) => updateHowToPlay({ title: e.target.value })}
-              placeholder="HƯỚNG DẪN CHƠI GAME..."
-              className="w-full px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-xs text-stone-100"
-            />
-          </div>
-
-          <div>
-            <label className="block text-[10px] text-stone-400 mb-1">
-              Nội dung hướng dẫn:
-            </label>
-            <textarea
-              rows={2}
-              value={howToPlay.content}
-              onChange={(e) => updateHowToPlay({ content: e.target.value })}
-              placeholder="Nhập hướng dẫn chơi game..."
-              className="w-full px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-xs text-stone-100"
-            />
-          </div>
-
-          {/* Chọn 5 màu sáng nổi bật trên nền tối */}
-          <div>
-            <label className="block text-[10px] text-stone-400 mb-1">
-              Chọn 5 Màu Sáng (Trên nền bảng tối):
-            </label>
-            <div className="grid grid-cols-5 gap-1.5">
-              {HOW_TO_PLAY_BRIGHT_COLORS.map((col) => {
-                const selected =
-                  (howToPlay.textColor || '#FDE047').toUpperCase() ===
-                  col.hex.toUpperCase();
-                return (
-                  <button
-                    key={col.id}
-                    type="button"
-                    onClick={() => updateHowToPlay({ textColor: col.hex })}
-                    className={`py-1.5 px-1 rounded-lg border text-[10px] font-bold flex flex-col items-center gap-1 cursor-pointer transition ${
-                      selected
-                        ? 'bg-stone-800 border-white ring-1 ring-white'
-                        : 'bg-stone-950 border-stone-800 hover:bg-stone-900'
-                    }`}
-                  >
-                    <span
-                      className="w-4 h-4 rounded-full border border-black/40 shadow"
-                      style={{ backgroundColor: col.hex }}
-                    />
-                    <span
-                      className="truncate max-w-full text-[9px]"
-                      style={{ color: col.hex }}
-                    >
-                      {col.label.split(' ')[0]}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Chọn Font chữ */}
-          <div>
-            <label className="block text-[10px] text-stone-400 mb-1">
-              Kiểu Font chữ:
-            </label>
-            <select
-              value={howToPlay.fontFamily}
-              onChange={(e) => updateHowToPlay({ fontFamily: e.target.value })}
-              className="w-full px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-xs text-amber-200"
-            >
-              {HOW_TO_PLAY_FONTS.map((f) => (
-                <option key={f.id} value={f.family}>
-                  {f.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Chỉnh Size bảng (Width) & FontSize */}
-          <div className="grid grid-cols-2 gap-2 pt-1">
-            <div className="p-2 rounded-lg bg-stone-950 border border-stone-800">
-              <div className="flex justify-between text-[10.5px] mb-1">
-                <span className="text-stone-400">Độ rộng bảng (Size):</span>
-                <span className="font-mono font-bold text-cyan-300">
-                  {howToPlay.widthPx}px
-                </span>
-              </div>
-              <input
-                type="range"
-                min={160}
-                max={500}
-                step={5}
-                value={howToPlay.widthPx || 250}
-                onChange={(e) =>
-                  updateHowToPlay({ widthPx: Number(e.target.value) })
-                }
-                className="w-full accent-cyan-400 cursor-pointer"
-              />
-            </div>
-
-            <div className="p-2 rounded-lg bg-stone-950 border border-stone-800">
-              <div className="flex justify-between text-[10.5px] mb-1">
-                <span className="text-stone-400">Cỡ chữ (FontSize):</span>
-                <span className="font-mono font-bold text-amber-300">
-                  {howToPlay.fontSizePx}px
-                </span>
-              </div>
-              <input
-                type="range"
-                min={8}
-                max={22}
-                step={1}
-                value={howToPlay.fontSizePx || 11}
-                onChange={(e) =>
-                  updateHowToPlay({ fontSizePx: Number(e.target.value) })
-                }
-                className="w-full accent-amber-400 cursor-pointer"
-              />
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* 4. Thêm / Bớt Icon Hướng Dẫn Quà Tặng */}
+      {/* 3. Thêm / Bớt Icon Hướng Dẫn Quà Tặng */}
       <section className="p-3.5 rounded-xl bg-stone-900/80 border border-stone-800 space-y-3">
         <div className="flex items-center justify-between">
           <div>
