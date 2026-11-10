@@ -1438,8 +1438,8 @@ export function useClassroomEngine() {
             const focusState: CameraFocusState = {
               provinceId: found.id,
               provinceName: found.name,
-              senders: found.recentContributors.slice(0, 4),
-              pointsAdded: found.points,
+              senders: [],
+              pointsAdded: 0,
               until: now + holdMs,
             };
             cameraFocusRef.current = focusState;
@@ -1763,8 +1763,8 @@ export function useClassroomEngine() {
     const nextFocus: CameraFocusState = {
       provinceId: found.id,
       provinceName: found.name,
-      senders: found.recentContributors.slice(0, 4),
-      pointsAdded: found.points,
+      senders: [],
+      pointsAdded: 0,
       startedAt: now,
       until: now + holdMs,
     };

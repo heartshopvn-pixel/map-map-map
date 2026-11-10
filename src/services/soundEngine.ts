@@ -177,6 +177,86 @@ function splitSpeechIntoChunks(text: string, maxChars = 165): string[] {
 }
 
 const STORAGE_BGM_TRACKS_KEY = 'province_gift_bgm_tracks_v1';
+const STORAGE_BGM_META_KEY = 'province_gift_bgm_meta_v1';
+const IDB_BGM_DB_NAME = 'province_gift_bgm_idb_v1';
+const IDB_BGM_STORE_NAME = 'bgm_state_store';
+const IDB_BGM_RECORD_KEY = 'saved_bgm_snapshot';
+
+interface PersistedBgmSnapshot {
+  tracks: BgmTrackItem[];
+  currentIndex: number;
+  isPlaying: boolean;
+  playMode: BgmPlayMode;
+  volume: number;
+  updatedAt: number;
+}
+
+function openBgmIndexedDB(): Promise<IDBDatabase | null> {
+  if (typeof window === 'undefined' || !('indexedDB' in window)) {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    try {
+      const req = window.indexedDB.open(IDB_BGM_DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_BGM_STORE_NAME)) {
+          db.createObjectStore(IDB_BGM_STORE_NAME);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function saveBgmSnapshotToIDB(snapshot: PersistedBgmSnapshot): Promise<void> {
+  const db = await openBgmIndexedDB();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_BGM_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(IDB_BGM_STORE_NAME);
+      store.put(snapshot, IDB_BGM_RECORD_KEY);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        resolve();
+      };
+    } catch {
+      db.close();
+      resolve();
+    }
+  });
+}
+
+async function loadBgmSnapshotFromIDB(): Promise<PersistedBgmSnapshot | null> {
+  const db = await openBgmIndexedDB();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_BGM_STORE_NAME, 'readonly');
+      const store = tx.objectStore(IDB_BGM_STORE_NAME);
+      const req = store.get(IDB_BGM_RECORD_KEY);
+      req.onsuccess = () => {
+        db.close();
+        resolve((req.result as PersistedBgmSnapshot) || null);
+      };
+      req.onerror = () => {
+        db.close();
+        resolve(null);
+      };
+    } catch {
+      db.close();
+      resolve(null);
+    }
+  });
+}
 
 class SoundService {
   private ctx: AudioContext | null = null;
@@ -249,7 +329,24 @@ class SoundService {
 
   constructor() {
     if (typeof window !== 'undefined') {
+      let wantAutoPlayFromSaved = true;
       try {
+        const savedMeta = localStorage.getItem(STORAGE_BGM_META_KEY);
+        if (savedMeta) {
+          const meta = JSON.parse(savedMeta);
+          if (typeof meta.currentIndex === 'number') {
+            this.currentBgmIndex = Math.max(0, meta.currentIndex);
+          }
+          if (meta.playMode === 'loop_one' || meta.playMode === 'next_all') {
+            this.bgmPlayMode = meta.playMode;
+          }
+          if (typeof meta.volume === 'number') {
+            this.bgmVolume = Math.max(0, Math.min(1, meta.volume));
+          }
+          if (typeof meta.isPlaying === 'boolean') {
+            wantAutoPlayFromSaved = meta.isPlaying;
+          }
+        }
         const savedTracks = localStorage.getItem(STORAGE_BGM_TRACKS_KEY);
         if (savedTracks) {
           const parsed = JSON.parse(savedTracks);
@@ -278,30 +375,93 @@ class SoundService {
       window.addEventListener('click', unlockAudio, { passive: true });
       window.addEventListener('keydown', unlockAudio, { passive: true });
 
-      // Tự động kéo trạng thái Nhạc Nền (BGM) qua HTTP cho link TikTok Studio (?view=live / ?obs=1)
-      const pullRemoteBgmState = async () => {
-        const endpoints = ['/api/bgm-state', 'http://127.0.0.1:8080/bgm-state', 'http://localhost:8080/bgm-state'];
+      // Tự động kéo trạng thái Nhạc Nền (BGM) qua HTTP từ Server / Local Bridge 8080
+      const pullRemoteBgmState = async (): Promise<boolean> => {
+        const endpoints = [
+          '/api/bgm-state',
+          'http://127.0.0.1:8080/bgm-state',
+          'http://localhost:8080/bgm-state',
+        ];
         for (const url of endpoints) {
           try {
             const res = await fetch(url, { cache: 'no-store' });
             if (!res.ok) continue;
             const data = await res.json();
-            if (data?.ok && data?.payload && Array.isArray(data.payload.tracks) && data.payload.tracks.length > 0) {
-              if (this.bgmTracks.length === 0 || (data.payload.isPlaying && (!this.bgmAudio || this.bgmAudio.paused))) {
+            if (
+              data?.ok &&
+              data?.payload &&
+              Array.isArray(data.payload.tracks) &&
+              data.payload.tracks.length > 0
+            ) {
+              if (
+                this.bgmTracks.length === 0 ||
+                (data.payload.isPlaying && (!this.bgmAudio || this.bgmAudio.paused))
+              ) {
                 this.applyRemoteBgmSnapshot(data.payload);
               }
-              return;
+              return true;
             }
           } catch {
             // Ignore
           }
         }
+        return false;
       };
 
-      setTimeout(() => void pullRemoteBgmState(), 450);
-      setTimeout(() => void pullRemoteBgmState(), 2200);
+      // Tự động khôi phục các file MP3 Nhạc Nền đã lưu trong IndexedDB (không giới hạn 5MB như localStorage!)
+      void loadBgmSnapshotFromIDB().then(async (idbSnap) => {
+        if (
+          idbSnap &&
+          Array.isArray(idbSnap.tracks) &&
+          idbSnap.tracks.length > 0
+        ) {
+          this.bgmTracks = idbSnap.tracks.filter(
+            (t) => t && typeof t.name === 'string' && typeof t.url === 'string'
+          );
+          if (typeof idbSnap.currentIndex === 'number' && this.bgmTracks.length > 0) {
+            this.currentBgmIndex =
+              ((idbSnap.currentIndex % this.bgmTracks.length) +
+                this.bgmTracks.length) %
+              this.bgmTracks.length;
+          }
+          if (idbSnap.playMode === 'loop_one' || idbSnap.playMode === 'next_all') {
+            this.bgmPlayMode = idbSnap.playMode;
+          }
+          if (typeof idbSnap.volume === 'number') {
+            this.bgmVolume = Math.max(0, Math.min(1, idbSnap.volume));
+          }
+          const shouldPlay =
+            typeof idbSnap.isPlaying === 'boolean'
+              ? idbSnap.isPlaying
+              : wantAutoPlayFromSaved;
+          this.emitBgmState();
+          if (this.bgmTracks.length > 0 && shouldPlay) {
+            this.playBgmTrackAt(this.currentBgmIndex, true);
+          } else {
+            this.broadcastBgmSync(true);
+          }
+          return;
+        }
+
+        // Nếu localStorage có sẵn bài nhỏ hoặc URL
+        if (this.bgmTracks.length > 0) {
+          this.emitBgmState();
+          if (wantAutoPlayFromSaved) {
+            this.playBgmTrackAt(this.currentBgmIndex, true);
+          }
+          return;
+        }
+
+        // Nếu trình duyệt mới / OBS chưa có trong IndexedDB -> kéo từ bộ nhớ đệm trên Server (.bgm-state-cache.json)
+        await pullRemoteBgmState();
+      });
+
+      setTimeout(() => void pullRemoteBgmState(), 1200);
       setInterval(() => {
-        if (this.bgmTracks.length === 0 || (this.isBgmPlaying && (!this.bgmAudio || this.bgmAudio.paused))) {
+        if (
+          this.bgmTracks.length === 0 ||
+          (this.isBgmPlaying && (!this.bgmAudio || this.bgmAudio.paused))
+        ) {
           void pullRemoteBgmState();
         }
       }, 6000);
@@ -387,26 +547,46 @@ class SoundService {
   }
 
   private saveBgmTracksToStorage() {
+    const serializable = this.bgmTracks.filter(
+      (t) => !t.url.startsWith('blob:')
+    );
+
+    // 1. Lưu đầy đủ tất cả các file MP3 (kể cả file nặng 10MB - 50MB) vào IndexedDB trình duyệt
+    void saveBgmSnapshotToIDB({
+      tracks: serializable,
+      currentIndex: this.currentBgmIndex,
+      isPlaying: this.isBgmPlaying,
+      playMode: this.bgmPlayMode,
+      volume: this.bgmVolume,
+      updatedAt: Date.now(),
+    });
+
+    // 2. Lưu trạng thái phát (currentIndex, isPlaying, playMode, volume) vào localStorage
     try {
-      const serializable = this.bgmTracks.filter(
-        (t) => !t.url.startsWith('blob:') && t.url.length < 15 * 1024 * 1024
+      localStorage.setItem(
+        STORAGE_BGM_META_KEY,
+        JSON.stringify({
+          currentIndex: this.currentBgmIndex,
+          isPlaying: this.isBgmPlaying,
+          playMode: this.bgmPlayMode,
+          volume: this.bgmVolume,
+        })
+      );
+    } catch {
+      // Ignore
+    }
+
+    // 3. Lưu danh sách nhạc vào localStorage nếu dung lượng nhỏ (< 3.5MB)
+    try {
+      const lightSerializable = serializable.filter(
+        (t) => t.url.length < 3.5 * 1024 * 1024
       );
       localStorage.setItem(
         STORAGE_BGM_TRACKS_KEY,
-        JSON.stringify(serializable)
+        JSON.stringify(lightSerializable)
       );
     } catch {
-      try {
-        const lightSerializable = this.bgmTracks.filter(
-          (t) => !t.url.startsWith('blob:') && t.url.length < 3.5 * 1024 * 1024
-        );
-        localStorage.setItem(
-          STORAGE_BGM_TRACKS_KEY,
-          JSON.stringify(lightSerializable)
-        );
-      } catch {
-        // Ignore quota errors for large files
-      }
+      // Ignore quota errors for large files (IndexedDB + Server cache already saved them!)
     }
   }
 
@@ -799,6 +979,7 @@ class SoundService {
     this.bgmAudio = audio;
     this.isBgmPlaying = true;
     this.bgmNeedsUnlock = false;
+    this.saveBgmTracksToStorage();
     this.emitBgmState();
     if (shouldSync) {
       this.broadcastBgmSync(true);
@@ -826,6 +1007,7 @@ class SoundService {
       this.bgmAudio.pause();
       this.isBgmPlaying = false;
       this.bgmNeedsUnlock = false;
+      this.saveBgmTracksToStorage();
       this.emitBgmState();
       this.broadcastBgmSync(true);
       return;
@@ -839,6 +1021,7 @@ class SoundService {
         .then(() => {
           this.isBgmPlaying = true;
           this.bgmNeedsUnlock = false;
+          this.saveBgmTracksToStorage();
           this.emitBgmState();
           this.broadcastBgmSync(true);
         })
@@ -869,6 +1052,7 @@ class SoundService {
     if (this.bgmAudio) {
       this.bgmAudio.loop = mode === 'loop_one';
     }
+    this.saveBgmTracksToStorage();
     this.emitBgmState();
     this.broadcastBgmSync(true);
   }
@@ -878,6 +1062,7 @@ class SoundService {
     if (this.bgmAudio) {
       this.bgmAudio.volume = this.localTabMuted ? 0 : this.bgmVolume;
     }
+    this.saveBgmTracksToStorage();
     this.emitBgmState();
     this.broadcastBgmSync(false);
   }

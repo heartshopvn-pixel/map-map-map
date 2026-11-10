@@ -19,12 +19,9 @@ import {
   MAP_RENDER_OFFSET_X,
   MAP_RENDER_OFFSET_Y,
   MAP_RENDER_SCALE,
-  RAW_MAP_HEIGHT,
-  RAW_MAP_WIDTH,
   SAFE_SQUARE_SIZE,
   SAFE_SQUARE_TOP,
   VIETNAM_ISLAND_CLUSTERS,
-  VIETNAM_MAP_IMAGE_URL,
 } from '../../services/vietnamMapGeometry';
 import {
   CameraFocusState,
@@ -587,6 +584,15 @@ export const GameStage: React.FC<GameStageProps> = ({
     [provinces]
   );
 
+  // Hợp nhất đường bao Vector của toàn bộ 34 tỉnh/thành để vẽ lớp bóng đổ 3D bản đồ tổng (vẫn sắc nét tuyệt đối khi zoom 15x)
+  const combinedVietnamSilhouettePath = useMemo(() => {
+    const paths: string[] = [];
+    polygonMap.forEach((poly) => {
+      if (poly.rawAllPaths) paths.push(poly.rawAllPaths);
+    });
+    return paths.join(' ');
+  }, [polygonMap]);
+
   // Thống kê tổng số hoa hồng, bình luận & người tham gia
   const stats = useMemo(() => {
     let totalRoses = 0;
@@ -677,12 +683,31 @@ export const GameStage: React.FC<GameStageProps> = ({
   //   hiện tượng GPU upscale bitmap mờ rồi mới nét lại sau khi hết transition!
   // - Rasterize Vector trực tiếp ở mọi khung hình (60fps), dù zoom 15x vẫn sắc nét tức thì.
   // =========================================================================
+  const svgElementRef = useRef<SVGSVGElement | null>(null);
   const svgCameraGroupRef = useRef<SVGGElement | null>(null);
   const animCameraRef = useRef<{ tx: number; ty: number; zoom: number }>({
     tx: 0,
     ty: 0,
     zoom: 1,
   });
+
+  // Trạng thái điều khiển thủ công ở màn hình mặc định: Lăn chuột Zoom In/Out & Giữ chuột trái kéo di chuyển
+  const isManualCameraRef = useRef<boolean>(false);
+  const manualCameraRef = useRef<{ tx: number; ty: number; zoom: number }>({
+    tx: 0,
+    ty: 0,
+    zoom: 1,
+  });
+  const mapPanDragRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startTx: number;
+    startTy: number;
+    hasMoved: boolean;
+  } | null>(null);
+  const suppressNextProvinceClickRef = useRef<boolean>(false);
+  const [isMapDragging, setIsMapDragging] = useState<boolean>(false);
 
   const targetCamera = useMemo(() => {
     if (!cameraFocus.provinceId) {
@@ -811,12 +836,25 @@ export const GameStage: React.FC<GameStageProps> = ({
       const blendT = Math.min(1, elapsed / durationMs);
       const eased = 1 - Math.pow(1 - blendT, 3);
 
-      const idlePose = computeIdlePose(now);
-      const curTx = startTx + (idlePose.tx - startTx) * eased;
-      const curTy = startTy + (idlePose.ty - startTy) * eased;
-      const curZoom = startZoom + (idlePose.zoom - startZoom) * eased;
+      // Nếu người dùng đã lăn chuột zoom hoặc kéo chuột trái di chuyển bản đồ mặc định -> giữ nguyên góc nhìn thủ công đó
+      const targetPose = isManualCameraRef.current
+        ? manualCameraRef.current
+        : computeIdlePose(now);
+
+      const curTx = isManualCameraRef.current
+        ? targetPose.tx
+        : startTx + (targetPose.tx - startTx) * eased;
+      const curTy = isManualCameraRef.current
+        ? targetPose.ty
+        : startTy + (targetPose.ty - startTy) * eased;
+      const curZoom = isManualCameraRef.current
+        ? targetPose.zoom
+        : startZoom + (targetPose.zoom - startZoom) * eased;
 
       animCameraRef.current = { tx: curTx, ty: curTy, zoom: curZoom };
+      if (!isManualCameraRef.current) {
+        manualCameraRef.current = { tx: curTx, ty: curTy, zoom: curZoom };
+      }
 
       if (svgCameraGroupRef.current) {
         svgCameraGroupRef.current.setAttribute(
@@ -849,31 +887,30 @@ export const GameStage: React.FC<GameStageProps> = ({
     [cameraFocus.provinceId, provinces]
   );
 
-  // Đảm bảo cả Avatar To lẫn Avatar Nhỏ khi Zoom vào tỉnh đều có danh sách người chơi kèm ảnh thật
-  // Cộng dồn theo tên người chơi để nếu cùng 1 người vừa comment +1đ vừa tặng hoa thì chỉ hiện 1 Avatar To duy nhất!
+  // Chỉ lấy danh sách người chơi thực sự vừa gửi trong lượt hiện tại (tuyệt đối không tự tạo 'Người Chơi' ảo khi click vào tỉnh)
   const activeBatchedSenders = useMemo<ProvinceContributor[]>(() => {
     if (!cameraFocus.provinceId) return [];
     const rawList =
       cameraFocus.senders && cameraFocus.senders.length > 0
         ? cameraFocus.senders
-        : focusedProvince && focusedProvince.recentContributors.length > 0
-        ? focusedProvince.recentContributors.slice(0, 4)
-        : [
+        : cameraFocus.username
+        ? [
             {
-              id: `preview_${cameraFocus.provinceId}`,
-              username: cameraFocus.username || 'Người Chơi',
+              id: `evt_${cameraFocus.provinceId}_${cameraFocus.startedAt || 0}`,
+              username: cameraFocus.username,
               avatarUrl: cameraFocus.avatarUrl || null,
               avatarColor: cameraFocus.avatarColor || '#10b981',
-              pointsAdded:
-                cameraFocus.pointsAdded || focusedProvince?.points || 1,
+              pointsAdded: cameraFocus.pointsAdded || 1,
               isRose: Boolean(cameraFocus.isRose),
               timestamp: Date.now(),
             },
-          ];
+          ]
+        : [];
 
     const byUser = new Map<string, ProvinceContributor>();
     for (const sender of rawList) {
-      const key = (sender.username || 'Người Chơi').toLowerCase();
+      const key = (sender.username || '').trim().toLowerCase();
+      if (!key) continue;
       const resolvedUrl = resolveAvatarForUsername(
         sender.username,
         sender.avatarUrl,
@@ -898,7 +935,7 @@ export const GameStage: React.FC<GameStageProps> = ({
     }
 
     return Array.from(byUser.values());
-  }, [cameraFocus, focusedProvince, npcAvatars]);
+  }, [cameraFocus, npcAvatars]);
 
   // Danh sách TẤT CẢ người chơi đã gửi điểm vào tỉnh này trong suốt phiên (lưu giữ tới khi hết phiên)
   const sessionProvinceContributors = useMemo<ProvinceContributor[]>(() => {
@@ -965,6 +1002,116 @@ export const GameStage: React.FC<GameStageProps> = ({
   const internalBorderWidth = config.mapInternalBorderWidth ?? 0.65;
   const internalBorderOpacity = config.mapInternalBorderOpacity ?? 0.25;
 
+  // Xử lý lăn chuột Zoom In / Out ở màn hình mặc định (Hội tụ ngay tại vị trí con trỏ chuột)
+  const handleMapWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (cameraFocus.provinceId) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const svgEl = svgElementRef.current;
+    let svgX = SAFE_SQUARE_SIZE / 2;
+    let svgY = SAFE_SQUARE_SIZE / 2;
+    if (svgEl) {
+      const rect = svgEl.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        svgX = ((e.clientX - rect.left) / rect.width) * SAFE_SQUARE_SIZE;
+        svgY = ((e.clientY - rect.top) / rect.height) * SAFE_SQUARE_SIZE;
+      }
+    }
+
+    const prev = animCameraRef.current;
+    const zoomFactor = e.deltaY < 0 ? 1.14 : 1 / 1.14;
+    const nextZoom = Math.max(0.45, Math.min(15, prev.zoom * zoomFactor));
+
+    // Giữ cố định điểm bản đồ ngay dưới con trỏ chuột khi lăn bánh xe
+    const mapX = (svgX - prev.tx) / prev.zoom;
+    const mapY = (svgY - prev.ty) / prev.zoom;
+    const nextTx = svgX - mapX * nextZoom;
+    const nextTy = svgY - mapY * nextZoom;
+
+    isManualCameraRef.current = true;
+    manualCameraRef.current = { tx: nextTx, ty: nextTy, zoom: nextZoom };
+    animCameraRef.current = { tx: nextTx, ty: nextTy, zoom: nextZoom };
+
+    if (svgCameraGroupRef.current) {
+      svgCameraGroupRef.current.setAttribute(
+        'transform',
+        `translate(${nextTx.toFixed(2)}, ${nextTy.toFixed(2)}) scale(${nextZoom.toFixed(4)})`
+      );
+    }
+  };
+
+  // Xử lý đè chuột trái kéo di chuyển màn hình ở bản đồ mặc định
+  const handleMapPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (cameraFocus.provinceId || e.button !== 0) return;
+    mapPanDragRef.current = {
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startTx: animCameraRef.current.tx,
+      startTy: animCameraRef.current.ty,
+      hasMoved: false,
+    };
+    suppressNextProvinceClickRef.current = false;
+  };
+
+  const handleMapPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = mapPanDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId || cameraFocus.provinceId) {
+      return;
+    }
+
+    const dxClient = e.clientX - drag.startClientX;
+    const dyClient = e.clientY - drag.startClientY;
+
+    if (!drag.hasMoved && Math.hypot(dxClient, dyClient) > 6) {
+      drag.hasMoved = true;
+      suppressNextProvinceClickRef.current = true;
+      isManualCameraRef.current = true;
+      setIsMapDragging(true);
+    }
+
+    if (drag.hasMoved) {
+      const effectiveScale = stageScale > 0 ? stageScale : 1;
+      const nextTx = drag.startTx + dxClient / effectiveScale;
+      const nextTy = drag.startTy + dyClient / effectiveScale;
+      const nextZoom = animCameraRef.current.zoom;
+
+      manualCameraRef.current = { tx: nextTx, ty: nextTy, zoom: nextZoom };
+      animCameraRef.current = { tx: nextTx, ty: nextTy, zoom: nextZoom };
+
+      if (svgCameraGroupRef.current) {
+        svgCameraGroupRef.current.setAttribute(
+          'transform',
+          `translate(${nextTx.toFixed(2)}, ${nextTy.toFixed(2)}) scale(${nextZoom.toFixed(4)})`
+        );
+      }
+    }
+  };
+
+  const handleMapPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = mapPanDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    if (drag.hasMoved) {
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignore
+      }
+      setTimeout(() => {
+        suppressNextProvinceClickRef.current = false;
+      }, 60);
+    }
+    mapPanDragRef.current = null;
+    setIsMapDragging(false);
+  };
+
+  const handleMapDoubleClick = () => {
+    if (cameraFocus.provinceId) return;
+    isManualCameraRef.current = false;
+    manualCameraRef.current = { tx: 0, ty: 0, zoom: 1 };
+  };
+
   return (
     <div className="flex-1 h-full flex items-center justify-center bg-stone-950 p-2 overflow-hidden select-none">
       {/* Khung chuẩn 9:16 (tương đương 1080x1920 thu phóng) */}
@@ -1006,8 +1153,23 @@ export const GameStage: React.FC<GameStageProps> = ({
                  - Nội suy trực tiếp trên <g ref={svgCameraGroupRef}> bằng requestAnimationFrame
                  - Multi-Stroke Vector Glow thay thế cho filter feDropShadow để không bao giờ bị mờ rồi mới rõ!
              ===================================================================== */}
-          <div className="absolute inset-0">
+          <div
+            className={`absolute inset-0 ${
+              !cameraFocus.provinceId
+                ? isMapDragging
+                  ? 'cursor-grabbing'
+                  : 'cursor-grab'
+                : ''
+            }`}
+            onWheel={handleMapWheel}
+            onPointerDown={handleMapPointerDown}
+            onPointerMove={handleMapPointerMove}
+            onPointerUp={handleMapPointerUp}
+            onPointerCancel={handleMapPointerUp}
+            onDoubleClick={handleMapDoubleClick}
+          >
             <svg
+              ref={svgElementRef}
               width={SAFE_SQUARE_SIZE}
               height={SAFE_SQUARE_SIZE}
               viewBox={`0 0 ${SAFE_SQUARE_SIZE} ${SAFE_SQUARE_SIZE}`}
@@ -1032,88 +1194,92 @@ export const GameStage: React.FC<GameStageProps> = ({
                 <g
                   transform={`translate(${MAP_RENDER_OFFSET_X}, ${MAP_RENDER_OFFSET_Y}) scale(${MAP_RENDER_SCALE})`}
                 >
-                  {/* Chỉ hiển thị ảnh nền đường bờ biển khi ở chế độ đung đưa 1x; khi Zoom vào tỉnh hoặc rê gần Bắc-Nam sẽ thuần Vector sắc nét 100% */}
-                  {!cameraFocus.provinceId &&
-                    (config.mapIdleMode || 'sway') === 'sway' && (
-                      <image
-                        href={VIETNAM_MAP_IMAGE_URL}
-                        x={0}
-                        y={0}
-                        width={RAW_MAP_WIDTH}
-                        height={RAW_MAP_HEIGHT}
-                        preserveAspectRatio="none"
-                        opacity={0.88}
+                  {/* LỚP NỀN BẢN ĐỒ MẶC ĐỊNH LIỀN MẠCH (LUÔN HIỂN THỊ CẢ KHI BÌNH THƯỜNG LẪN KHI ZOOM VÀO TỈNH):
+                      - Bóng đổ 3D bản đồ tổng
+                      - Viền bờ biển bao ngoài dải đất chữ S
+                      - Nền đất liền mặc định (#fef5cc) liền khối, không có bất kỳ đường phân chia tỉnh nào bên trong */}
+                  {combinedVietnamSilhouettePath && (
+                    <g className="pointer-events-none">
+                      <path
+                        d={combinedVietnamSilhouettePath}
+                        transform="translate(9, 13)"
+                        fill="#020c12"
+                        stroke="#020c12"
+                        strokeWidth={3.5}
+                        strokeLinejoin="round"
+                        opacity={0.62}
                       />
-                    )}
+                      <path
+                        d={combinedVietnamSilhouettePath}
+                        fill="#c9962c"
+                        stroke="#c9962c"
+                        strokeWidth={4.4}
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d={combinedVietnamSilhouettePath}
+                        fill="#fef5cc"
+                        stroke="#fef5cc"
+                        strokeWidth={2.8}
+                        strokeLinejoin="round"
+                      />
+                    </g>
+                  )}
 
-                  {/* Vẽ Vector 34 tỉnh/thành phố: Độ nét vô hạn ở mọi mức phóng đại (kể cả 15x) */}
-                  {provinces.map((prov) => {
-                    const poly = polygonMap.get(prov.id);
-                    if (!poly) return null;
-                    const isFocused = cameraFocus.provinceId === prov.id;
-                    const hasPoints = prov.points > 0;
-                    const isTop1 =
-                      top5Provinces[0]?.id === prov.id && prov.points > 0;
+                  {/* CHẾ ĐỘ 1: BẢN ĐỒ TỔNG (KHI CHƯA ZOOM VÀO TỈNH)
+                      34 tỉnh/thành đã được chuẩn hóa TopoJSON dùng chung 100% đỉnh biên giới (không lệch, không hở khe) */}
+                  {!focusedProvince &&
+                    provinces.map((prov) => {
+                      const poly = polygonMap.get(prov.id);
+                      if (!poly) return null;
+                      const hasPoints = prov.points > 0;
+                      const isTop1 =
+                        top5Provinces[0]?.id === prov.id && prov.points > 0;
+                      const baseCreamFill =
+                        prov.code % 2 === 0 ? '#fef5cc' : '#fde89e';
 
-                    const baseCreamFill =
-                      prov.code % 2 === 0 ? '#fef5cc' : '#fde89e';
-
-                    return (
-                      <g
-                        key={prov.id}
-                        onClick={() => onSelectProvince?.(prov.id)}
-                        className="cursor-pointer"
-                      >
-                        {/* Lớp nền Vector tỉnh */}
+                      return (
                         <path
-                          d={poly.rawAllPaths}
+                          key={prov.id}
+                          d={poly.rawPrimaryPath}
+                          style={{ cursor: 'pointer' }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (suppressNextProvinceClickRef.current) return;
+                            onSelectProvince?.(prov.id);
+                          }}
                           fill={
-                            isTop1 && !isFocused
+                            isTop1
                               ? '#e3f9df'
-                              : hasPoints && !isFocused
+                              : hasPoints
                               ? '#f3fae8'
                               : baseCreamFill
                           }
                           stroke={
-                            cameraFocus.provinceId
-                              ? 'rgba(13, 52, 62, 0.35)'
-                              : baseCreamFill
+                            isTop1
+                              ? '#FF6F61'
+                              : hasPoints
+                              ? 'rgba(22, 138, 80, 0.55)'
+                              : `rgba(181, 131, 24, ${Math.max(
+                                  0.42,
+                                  internalBorderOpacity
+                                )})`
                           }
-                          strokeWidth={cameraFocus.provinceId ? 1.2 : 3.6}
+                          strokeWidth={
+                            isTop1
+                              ? 2.0
+                              : hasPoints
+                              ? 1.25
+                              : Math.max(1.0, internalBorderWidth)
+                          }
                           strokeLinejoin="round"
-                          opacity={
-                            cameraFocus.provinceId && !isFocused ? 0.52 : 0.94
-                          }
                         />
+                      );
+                    })}
 
-                        {/* Đường viền mỏng giữa các tỉnh */}
-                        {!isFocused && (
-                          <path
-                            d={poly.rawAllPaths}
-                            fill="none"
-                            stroke={
-                              isTop1
-                                ? '#FF6F61'
-                                : hasPoints
-                                ? 'rgba(22, 138, 80, 0.5)'
-                                : `rgba(181, 131, 24, ${internalBorderOpacity})`
-                            }
-                            strokeWidth={
-                              isTop1
-                                ? 2.2
-                                : hasPoints
-                                ? 1.2
-                                : internalBorderWidth
-                            }
-                            strokeLinejoin="round"
-                          />
-                        )}
-                      </g>
-                    );
-                  })}
-
-                  {/* TỈNH ĐANG ĐƯỢC CAMERA ZOOM VÀO:
-                      Nền #D4F5D0 + Viền Hồng San Hô (#FF6F61) + Multi-Stroke Vector Glow (Không dùng filter bitmap!) */}
+                  {/* CHẾ ĐỘ 2: KHI ZOOM VÀO TỈNH
+                      - Tỉnh đang chọn nằm ngay trên nền Bản đồ mặc định liền mạch (#fef5cc)
+                      - Không hiển thị thêm các vector phân chia hay các tỉnh khác */}
                   {focusedProvince &&
                     (() => {
                       const focusedPoly = polygonMap.get(focusedProvince.id);
@@ -1121,40 +1287,18 @@ export const GameStage: React.FC<GameStageProps> = ({
                       const zoomCompensation = Math.sqrt(
                         Math.max(1, currentZoomScale / 2.6)
                       );
-                      const outerGlowWidth = Math.max(
-                        5,
-                        22 / zoomCompensation
-                      );
-                      const midGlowWidth = Math.max(
-                        3.2,
-                        11.5 / zoomCompensation
-                      );
                       const coreBorderWidth = Math.max(
-                        1.6,
-                        5.2 / zoomCompensation
+                        1.5,
+                        3.6 / zoomCompensation
                       );
 
                       return (
                         <g className="pointer-events-none">
-                          {/* Lớp hào quang Vector ngoài cùng (#D4F5D0) */}
                           <path
                             d={focusedPoly.rawPrimaryPath}
-                            fill="none"
-                            stroke="#D4F5D0"
-                            strokeWidth={outerGlowWidth}
-                            strokeOpacity={0.32}
-                            strokeLinejoin="round"
+                            transform="translate(2.5, 3.8)"
+                            fill="rgba(2, 12, 18, 0.26)"
                           />
-                          {/* Lớp hào quang Vector Hồng San Hô (#FF6F61) */}
-                          <path
-                            d={focusedPoly.rawPrimaryPath}
-                            fill="none"
-                            stroke="#FF6F61"
-                            strokeWidth={midGlowWidth}
-                            strokeOpacity={0.48}
-                            strokeLinejoin="round"
-                          />
-                          {/* Thân tỉnh Vector sắc nét tuyệt đối */}
                           <path
                             d={focusedPoly.rawPrimaryPath}
                             fill="#D4F5D0"
@@ -1167,57 +1311,58 @@ export const GameStage: React.FC<GameStageProps> = ({
                     })()}
                 </g>
 
-                {/* QUẦN ĐẢO HOÀNG SA & QUẦN ĐẢO TRƯỜNG SA (VIỆT NAM) */}
-                {VIETNAM_ISLAND_CLUSTERS.map((cluster) => (
-                  <g key={cluster.id}>
-                    {cluster.islands.map((isl, idx) => (
+                {/* QUẦN ĐẢO HOÀNG SA & QUẦN ĐẢO TRƯỜNG SA (CHỈ HIỆN Ở BẢN ĐỒ TỔNG) */}
+                {!focusedProvince &&
+                  VIETNAM_ISLAND_CLUSTERS.map((cluster) => (
+                    <g key={cluster.id}>
+                      {cluster.islands.map((isl, idx) => (
+                        <ellipse
+                          key={idx}
+                          cx={isl.cx}
+                          cy={isl.cy}
+                          rx={isl.rx}
+                          ry={isl.ry}
+                          transform={`rotate(${isl.rot} ${isl.cx} ${isl.cy})`}
+                          fill="#fce694"
+                          stroke="rgba(181, 131, 24, 0.45)"
+                          strokeWidth={0.55}
+                        />
+                      ))}
                       <ellipse
-                        key={idx}
-                        cx={isl.cx}
-                        cy={isl.cy}
-                        rx={isl.rx}
-                        ry={isl.ry}
-                        transform={`rotate(${isl.rot} ${isl.cx} ${isl.cy})`}
-                        fill="#fce694"
-                        stroke="rgba(181, 131, 24, 0.45)"
+                        cx={cluster.centerX}
+                        cy={cluster.centerY - 14}
+                        rx={27}
+                        ry={16}
+                        fill="none"
+                        stroke="#d8c374"
                         strokeWidth={0.55}
+                        strokeDasharray="2.5 2.5"
+                        opacity={0.65}
                       />
-                    ))}
-                    <ellipse
-                      cx={cluster.centerX}
-                      cy={cluster.centerY - 14}
-                      rx={27}
-                      ry={16}
-                      fill="none"
-                      stroke="#d8c374"
-                      strokeWidth={0.55}
-                      strokeDasharray="2.5 2.5"
-                      opacity={0.65}
-                    />
-                    <text
-                      x={cluster.centerX}
-                      y={cluster.centerY + 12}
-                      textAnchor="middle"
-                      fill="#f1e6b8"
-                      fontSize="8.5"
-                      fontWeight="800"
-                      letterSpacing="0.6"
-                    >
-                      {cluster.title}
-                    </text>
-                    <text
-                      x={cluster.centerX}
-                      y={cluster.centerY + 22}
-                      textAnchor="middle"
-                      fill="#b8cfd4"
-                      fontSize="7"
-                      fontWeight="700"
-                      letterSpacing="1.1"
-                    >
-                      {cluster.subtitle}
-                    </text>
-                  </g>
-                ))}
+                      <text
+                        x={cluster.centerX}
+                        y={cluster.centerY + 12}
+                        textAnchor="middle"
+                        fill="#f1e6b8"
+                        fontSize="8.5"
+                        fontWeight="800"
+                        letterSpacing="0.6"
+                      >
+                        {cluster.title}
+                      </text>
+                      <text
+                        x={cluster.centerX}
+                        y={cluster.centerY + 22}
+                        textAnchor="middle"
+                        fill="#b8cfd4"
+                        fontSize="7"
+                        fontWeight="700"
+                        letterSpacing="1.1"
+                      >
+                        {cluster.subtitle}
+                      </text>
+                    </g>
+                  ))}
 
                 {/* KHI CAMERA Ở CHẾ ĐỘ CHỜ CỦA MAP MẶC ĐỊNH:
                     Các tên tỉnh kèm điểm hiển thị MÀU HỒNG NHẠT (#fbcfe8) nổi bật & sang trọng */}
@@ -1299,7 +1444,7 @@ export const GameStage: React.FC<GameStageProps> = ({
                 const displayDelta =
                   cameraFocus.pointsAdded ||
                   latestSender?.pointsAdded ||
-                  1;
+                  0;
                 const hasRoseBurst =
                   Boolean(cameraFocus.isRose) ||
                   (cameraFocus.totalRoses || 0) > 0 ||
@@ -1451,21 +1596,23 @@ export const GameStage: React.FC<GameStageProps> = ({
                         </div>
                       )}
 
-                      {/* Floating Text số điểm vừa nhận (+1, +5, +10...) kèm icon Hoa Hồng bay vọt lên */}
-                      <div className="province-float-points flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#FF6F61] border-2 border-white shadow-[0_4px_14px_rgba(255,111,97,0.75)] mb-1">
-                        <span className="font-mono text-base font-black text-white leading-none drop-shadow">
-                          +{displayDelta}
-                        </span>
-                        {hasRoseBurst && (
-                          <span className="text-sm leading-none">
-                            {renderIconContent(
-                              config.roseIconUrl,
-                              '🌹',
-                              'w-4 h-4 object-contain'
-                            )}
+                      {/* Floating Text số điểm vừa nhận (+1, +5, +10...) kèm icon Hoa Hồng bay vọt lên (chỉ hiện khi thực sự có cộng điểm) */}
+                      {displayDelta > 0 && (
+                        <div className="province-float-points flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#FF6F61] border-2 border-white shadow-[0_4px_14px_rgba(255,111,97,0.75)] mb-1">
+                          <span className="font-mono text-base font-black text-white leading-none drop-shadow">
+                            +{displayDelta}
                           </span>
-                        )}
-                      </div>
+                          {hasRoseBurst && (
+                            <span className="text-sm leading-none">
+                              {renderIconContent(
+                                config.roseIconUrl,
+                                '🌹',
+                                'w-4 h-4 object-contain'
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      )}
 
                       {/* Số điểm hiện tại của tỉnh TO RÕ + Tên Tỉnh ở ngay trung tâm */}
                       <div className="px-3.5 py-1.5 rounded-2xl bg-[#072229]/92 border-2 border-[#FF6F61] shadow-[0_6px_22px_rgba(0,0,0,0.75)] flex flex-col items-center min-w-[96px]">

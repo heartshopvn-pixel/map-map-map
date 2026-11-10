@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
@@ -52,6 +53,27 @@ async function startServer() {
   };
 
   const latestSyncPackets: Record<string, any> = {};
+  const BGM_CACHE_FILE = path.join(__dirname, '.bgm-state-cache.json');
+
+  try {
+    if (fs.existsSync(BGM_CACHE_FILE)) {
+      const rawCache = fs.readFileSync(BGM_CACHE_FILE, 'utf-8');
+      const parsedCache = JSON.parse(rawCache);
+      if (parsedCache && parsedCache.action === 'SYNC_BGM_STATE') {
+        latestSyncPackets['SYNC_BGM_STATE'] = parsedCache;
+      }
+    }
+  } catch {
+    // Ignore cache read error
+  }
+
+  const persistBgmPacketToDisk = (packet: any) => {
+    try {
+      fs.writeFile(BGM_CACHE_FILE, JSON.stringify(packet), 'utf-8', () => {});
+    } catch {
+      // Ignore disk write error
+    }
+  };
 
   // Real-time SSE Stream for syncing Admin Tab -> OBS Browser Source (?obs=1)
   app.get('/api/sync-stream', (req: Request, res: Response) => {
@@ -121,6 +143,9 @@ async function startServer() {
       packet.action === 'SYNC_BGM_STATE'
     ) {
       latestSyncPackets[packet.action] = packet;
+      if (packet.action === 'SYNC_BGM_STATE') {
+        persistBgmPacketToDisk(packet);
+      }
     }
 
     const payloadStr = `data: ${JSON.stringify(packet)}\n\n`;
@@ -171,6 +196,7 @@ async function startServer() {
       timestamp: Date.now(),
     };
     latestSyncPackets['SYNC_BGM_STATE'] = packet;
+    persistBgmPacketToDisk(packet);
     const payloadStr = `data: ${JSON.stringify(packet)}\n\n`;
     clients.forEach((c) => {
       try {

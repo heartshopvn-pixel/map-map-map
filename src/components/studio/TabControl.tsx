@@ -566,16 +566,15 @@ export const TabControl: React.FC<TabControlProps> = ({
                 <input
                   type="number"
                   min={15}
-                  max={3600}
+                  max={7200}
                   value={config.sessionDurationSec || 180}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const nextSec = Math.max(15, Number(e.target.value) || 60);
                     onUpdateConfig({
-                      sessionDurationSec: Math.max(
-                        15,
-                        Number(e.target.value) || 60
-                      ),
-                    })
-                  }
+                      sessionDurationSec: nextSec,
+                      roundDurationSec: nextSec,
+                    });
+                  }}
                   className="w-full px-2 py-1 rounded bg-stone-900 border border-stone-700 text-xs font-mono font-bold text-emerald-300 focus:outline-none focus:border-emerald-400"
                 />
               </div>
@@ -592,12 +591,17 @@ export const TabControl: React.FC<TabControlProps> = ({
                 { label: '2 phút', sec: 120 },
                 { label: '3 phút', sec: 180 },
                 { label: '5 phút', sec: 300 },
+                { label: '30 phút', sec: 1800 },
+                { label: '60 phút', sec: 3600 },
               ].map((preset) => (
                 <button
                   key={preset.sec}
                   type="button"
                   onClick={() =>
-                    onUpdateConfig({ sessionDurationSec: preset.sec })
+                    onUpdateConfig({
+                      sessionDurationSec: preset.sec,
+                      roundDurationSec: preset.sec,
+                    })
                   }
                   className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition ${
                     (config.sessionDurationSec || 180) === preset.sec
