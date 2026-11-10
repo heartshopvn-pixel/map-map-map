@@ -1418,6 +1418,114 @@ export const GameStage: React.FC<GameStageProps> = ({
                       </g>
                     );
                   })}
+
+                {/* HIỂN THỊ AVATAR MINI CỦA NHỮNG BẠN ĐANG Ở TỈNH ĐÓ TRÊN MAP CHẾ ĐỘ CHỜ */}
+                {!cameraFocus.provinceId &&
+                  provinces.map((prov) => {
+                    const poly = polygonMap.get(prov.id);
+                    if (!poly || !prov.recentContributors?.length) return null;
+
+                    const showReal = config.showIdleMapRealAvatars !== false;
+                    const showNpc = config.showIdleMapNpcAvatars !== false;
+
+                    const visibleContribs = prov.recentContributors.filter(
+                      (c) => (c.isNpc ? showNpc : showReal)
+                    );
+                    if (visibleContribs.length === 0) return null;
+
+                    const maxMini = 5;
+                    const displayList = visibleContribs.slice(0, maxMini);
+                    const extraCount = Math.max(
+                      0,
+                      visibleContribs.length - displayList.length
+                    );
+                    const avatarDiameter = 12;
+                    const stepX = 7.5;
+                    const totalWidth =
+                      avatarDiameter + (displayList.length - 1) * stepX;
+                    const startX = poly.centerX - totalWidth / 2;
+                    const startY = poly.centerY - avatarDiameter / 2;
+
+                    return (
+                      <g
+                        key={`idle_avatars_${prov.id}`}
+                        className="pointer-events-none"
+                      >
+                        {displayList.map((contrib, idx) => {
+                          const ax = startX + idx * stepX;
+                          const ay =
+                            startY + (idx % 2 === 1 ? -1.4 : 1.0);
+                          const borderColor = contrib.isNpc
+                            ? '#38bdf8'
+                            : '#FF6F61';
+                          const fallbackAvatar = resolveAvatarForUsername(
+                            contrib.username,
+                            contrib.avatarUrl,
+                            npcAvatars || DEFAULT_NPC_AVATARS
+                          );
+                          return (
+                            <foreignObject
+                              key={`${prov.id}_mini_${contrib.id || contrib.username}_${idx}`}
+                              x={ax}
+                              y={ay}
+                              width={avatarDiameter}
+                              height={avatarDiameter}
+                              style={{ overflow: 'visible' }}
+                            >
+                              <div
+                                className="w-full h-full rounded-full overflow-hidden bg-stone-900 shadow-sm"
+                                style={{
+                                  border: `1.2px solid ${borderColor}`,
+                                  boxShadow: '0 1px 2.5px rgba(0,0,0,0.65)',
+                                }}
+                              >
+                                <img
+                                  src={fallbackAvatar}
+                                  alt={contrib.username}
+                                  className="w-full h-full object-cover block"
+                                  onError={(e) => {
+                                    e.currentTarget.onerror = null;
+                                    e.currentTarget.src =
+                                      DEFAULT_NPC_AVATARS[0];
+                                  }}
+                                />
+                              </div>
+                            </foreignObject>
+                          );
+                        })}
+                        {extraCount > 0 && (
+                          <g
+                            transform={`translate(${(
+                              startX +
+                              displayList.length * stepX +
+                              4
+                            ).toFixed(1)}, ${poly.centerY.toFixed(1)})`}
+                          >
+                            <rect
+                              x={-5.5}
+                              y={-4.5}
+                              width={11}
+                              height={9}
+                              rx={4.5}
+                              fill="#0f172a"
+                              stroke="#fbbf24"
+                              strokeWidth={0.7}
+                            />
+                            <text
+                              x={0}
+                              y={2.1}
+                              textAnchor="middle"
+                              fill="#fde68a"
+                              fontSize="5.5"
+                              fontWeight="900"
+                            >
+                              +{extraCount}
+                            </text>
+                          </g>
+                        )}
+                      </g>
+                    );
+                  })}
               </g>
             </svg>
 

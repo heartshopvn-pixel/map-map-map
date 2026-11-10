@@ -283,10 +283,13 @@ export interface GameConfig {
   avatarSizePx: number;
   maxContributorsPerTile: number;
   mapIdleMode: MapIdleMode;
+  mapIdleZoom?: number;
   mapIdleSwayAmplitudePx: number;
   mapIdleSwaySpeed: number;
   mapIdlePanZoom: number;
   mapIdlePanCycleSec: number;
+  showIdleMapNpcAvatars?: boolean;
+  showIdleMapRealAvatars?: boolean;
 
   // Giả lập NPC tự động
   npcAutoEnabled: boolean;

@@ -478,6 +478,7 @@ export function useClassroomEngine() {
               pointsAdded: prevEntry.pointsAdded + sender.pointsAdded,
               roseCount: (prevEntry.roseCount || 0) + (sender.roseCount || 0),
               isRose: Boolean(prevEntry.isRose || sender.isRose),
+              isNpc: prevEntry.isNpc === false ? false : Boolean(sender.isNpc),
               timestamp: now,
             });
           } else {
@@ -1744,6 +1745,7 @@ export function useClassroomEngine() {
             username: uname,
             avatarUrl: uavatar,
             isRose,
+            isNpc: true,
           },
           true
         );

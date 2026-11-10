@@ -693,6 +693,71 @@ export const TabControl: React.FC<TabControlProps> = ({
             <span>Reset Round &amp; Bảng Top 3 Về 0</span>
           </button>
         </div>
+
+        {/* Nút Hiện / Ẩn Avatar Mini của Người Thật & NPC trên Map Chế Độ Chờ */}
+        <div className="p-2.5 rounded-lg bg-stone-950 border border-cyan-500/35 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-extrabold text-cyan-200">
+              👥 Avatar Mini Trên Map Chế Độ Chờ (Từng Tỉnh):
+            </span>
+            <span className="text-[9.5px] text-stone-400">
+              Bật / tắt hiển thị trên bản đồ tổng
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateConfig({
+                  showIdleMapRealAvatars:
+                    config.showIdleMapRealAvatars === false ? true : false,
+                })
+              }
+              className={`px-2.5 py-2 rounded-lg text-[11px] font-black cursor-pointer transition border flex items-center justify-center gap-1.5 ${
+                config.showIdleMapRealAvatars !== false
+                  ? 'bg-emerald-500/25 border-emerald-400 text-emerald-200 shadow-sm'
+                  : 'bg-stone-900 border-stone-700 text-stone-400 hover:text-stone-200'
+              }`}
+            >
+              <span>👤 Người Thật:</span>
+              <span
+                className={
+                  config.showIdleMapRealAvatars !== false
+                    ? 'text-emerald-300 underline'
+                    : 'text-rose-400'
+                }
+              >
+                {config.showIdleMapRealAvatars !== false ? 'ĐANG HIỆN' : 'ĐANG ẨN'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                onUpdateConfig({
+                  showIdleMapNpcAvatars:
+                    config.showIdleMapNpcAvatars === false ? true : false,
+                })
+              }
+              className={`px-2.5 py-2 rounded-lg text-[11px] font-black cursor-pointer transition border flex items-center justify-center gap-1.5 ${
+                config.showIdleMapNpcAvatars !== false
+                  ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200 shadow-sm'
+                  : 'bg-stone-900 border-stone-700 text-stone-400 hover:text-stone-200'
+              }`}
+            >
+              <span>🤖 NPC:</span>
+              <span
+                className={
+                  config.showIdleMapNpcAvatars !== false
+                    ? 'text-cyan-300 underline'
+                    : 'text-rose-400'
+                }
+              >
+                {config.showIdleMapNpcAvatars !== false ? 'ĐANG HIỆN' : 'ĐANG ẨN'}
+              </span>
+            </button>
+          </div>
+        </div>
       </section>
 
       {/* 1. Test nhanh Đến Tỉnh (+1đ, 1 hoặc 3 lần/tỉnh/ván), Gửi Hoa Hồng (+5đ) & Quà Đặc Biệt (>1 coin) */}

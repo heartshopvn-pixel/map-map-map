@@ -803,10 +803,13 @@ export const DEFAULT_CONFIG: GameConfig = {
   avatarSizePx: 46,
   maxContributorsPerTile: 20,
   mapIdleMode: 'sway',
+  mapIdleZoom: 1.0,
   mapIdleSwayAmplitudePx: 8,
   mapIdleSwaySpeed: 1.0,
   mapIdlePanZoom: 1.65,
   mapIdlePanCycleSec: 18,
+  showIdleMapNpcAvatars: true,
+  showIdleMapRealAvatars: true,
 
   // NPC giả lập
   npcAutoEnabled: false,
